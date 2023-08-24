@@ -1,6 +1,7 @@
 import express from "express";
 import * as grpc from '@grpc/grpc-js';
-import { connect, Contract, Gateway, Identity, Signer, signers } from '@hyperledger/fabric-gateway';
+import { connect, Contract, Gateway, Identity, Signer, signers,
+    Network, ChaincodeEvent, CloseableAsyncIterable, GatewayError } from '@hyperledger/fabric-gateway';
 import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -13,8 +14,8 @@ const app = express();
 
 const channelName = envOrDefault('CHANNEL_NAME', 'mychannel');
 const chaincodeName = envOrDefault('CHAINCODE_NAME', 'token_erc20');
-const mspId = envOrDefault('MSP_ID', 'Org2MSP');
-// const mspId = envOrDefault('MSP_ID', 'Org1MSP');
+// const mspId = envOrDefault('MSP_ID', 'Org2MSP');
+const mspId = envOrDefault('MSP_ID', 'Org1MSP');
 
 console.log(__dirname);
 
@@ -27,35 +28,55 @@ initializeApp({
 const db = getFirestore();
 
 // Path to crypto materials.
-const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
-// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
+// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
+const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
 
 // Path to user private key directory.
-const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
-// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
+// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
+const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
 
 // Path to user certificate.
-const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
-// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
+// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
+const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
 
 // Path to peer tls certificate.
-const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
-// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
+// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
+const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
 
 // Gateway peer endpoint.
-const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
-// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
+// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
+const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
 
 // Gateway peer SSL host name override.
-const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
-// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
+// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
+const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
 
 const utf8Decoder = new TextDecoder();
 // const assetId = `asset${Date.now()}`;
 
 
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
     res.send('Hello from express and typescript');
+    const client = await newGrpcConnection();
+
+    const gateway = await connectGateway(client);
+
+    let events: CloseableAsyncIterable<ChaincodeEvent> | undefined;
+
+    try {
+        const network = gateway.getNetwork(channelName);
+
+        events = await startEventListening(network);
+
+    } catch(error: any) {
+        console.log(error);
+        res.send({
+            error: 1,
+            errmsg: error.cause.details
+        });
+    } finally {
+        // events?.close();
+    }
 });
 
 app.get('/init', async (req, res) => {
@@ -559,6 +580,8 @@ async function initLedger(contract: Contract): Promise<void> {
 
     await contract.submitTransaction('InitLedger', 'token1');
     await contract.submitTransaction('InitLedger', 'token2');
+    await contract.submitTransaction('Mint', '2000', 'token2');
+    await contract.submitTransaction('Mint', '3000', 'token2');
 
     console.log('*** Transaction committed successfully');
 }
@@ -660,6 +683,37 @@ async function getWalletHistory(contract: Contract, walletId: string): Promise<a
     const result = JSON.parse(resultJson);
     console.log('*** Result:', result);
     return result;
+}
+
+
+async function startEventListening(network: Network): Promise<CloseableAsyncIterable<ChaincodeEvent>> {
+    console.log('\n*** Start chaincode event listening');
+
+    const events = await network.getChaincodeEvents(chaincodeName);
+
+    void readEvents(events); // Don't await - run asynchronously
+    return events;
+}
+
+async function readEvents(events: CloseableAsyncIterable<ChaincodeEvent>): Promise<void> {
+    try {
+        for await (let event of events) {
+            console.log('\n*** Receive event');
+
+            const payload = parseJson(event.payload);
+            console.log(`\n<-- Chaincode event received: ${event.eventName} -`, payload);
+        }
+    } catch (error: unknown) {
+        // Ignore the read error when events.close() is called explicitly
+        if (!(error instanceof GatewayError) || error.code !== grpc.status.CANCELLED) {
+            throw error;
+        }
+    }
+}
+
+function parseJson(jsonBytes: Uint8Array): unknown {
+    const json = utf8Decoder.decode(jsonBytes);
+    return JSON.parse(json);
 }
 
 async function newGrpcConnection(): Promise<grpc.Client> {
