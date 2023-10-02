@@ -14,8 +14,8 @@ const app = express();
 
 const channelName = envOrDefault('CHANNEL_NAME', 'mychannel');
 const chaincodeName = envOrDefault('CHAINCODE_NAME', 'token_erc20');
-// const mspId = envOrDefault('MSP_ID', 'Org2MSP');
-const mspId = envOrDefault('MSP_ID', 'Org1MSP');
+const mspId = envOrDefault('MSP_ID', 'Org2MSP');
+// const mspId = envOrDefault('MSP_ID', 'Org1MSP');
 
 console.log(__dirname);
 
@@ -28,28 +28,28 @@ initializeApp({
 const db = getFirestore();
 
 // Path to crypto materials.
-// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
-const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
+const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
+// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
 
 // Path to user private key directory.
-// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
-const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
+const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
+// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
 
 // Path to user certificate.
-// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
-const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
+const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
+// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
 
 // Path to peer tls certificate.
-// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
-const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
+const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
+// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
 
 // Gateway peer endpoint.
-// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
-const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
+const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
+// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
 
 // Gateway peer SSL host name override.
-// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
-const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
+const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
+// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
 
 const utf8Decoder = new TextDecoder();
 // const assetId = `asset${Date.now()}`;
@@ -274,6 +274,49 @@ app.get('/getAllTokens', async (req, res) => {
     }
 });
 
+app.get('/getAllTransfer', async (req, res) => {
+    const client = await newGrpcConnection();
+
+    const gateway = await connectGateway(client);
+
+    try {
+        const network = gateway.getNetwork(channelName);
+        const contract = network.getContract(chaincodeName);
+        const token_list = await getAllTokens(contract);
+        const all_transection = [];
+        for (let i = 0; i < token_list.length; i++) {
+            const token = token_list[i]
+            const data = await getWalletHistory(contract, token);
+            all_transection.push(...data.map((row: any) => Object.assign(row, { token })))
+        }
+        const all_transfer: any = [];
+        all_transection.forEach(transection => {
+            const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
+            if (transfer != undefined) {
+                if (transection.tx_amount < 0) {
+                    Object.assign(transfer, { from: transection })
+                } else {
+                    Object.assign(transfer, { to: transection })
+                }
+            } else {
+                const data = {
+                    tx_id: transection.tx_id,
+                    from: transection.tx_amount < 0 ? transection : null,
+                    to: transection.tx_amount > 0 ? transection : null
+                }
+                all_transfer.push(data);
+            }
+        });
+        res.send({
+            error: 0,
+            data: all_transfer
+        });
+    } finally {
+        gateway.close();
+        client.close();
+    }
+});
+
 app.get('/mint', async (req, res) => {
     let token = req.query.token;
     let value = req.query.value;
@@ -472,16 +515,16 @@ app.get('/transferBalance', async (req, res) => {
 
 
 app.get('/getHistory', async (req, res) => {
-    let walletId = req.query.walletId;
+    let token = req.query.token;
 
-    if (walletId == undefined) {
+    if (token == undefined) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
         const client = await newGrpcConnection();
-        walletId = walletId.toString();
+        token = token.toString();
         const gateway = await connectGateway(client);
     
         try {
@@ -494,7 +537,7 @@ app.get('/getHistory', async (req, res) => {
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
-                data: await getWalletHistory(contract, walletId)
+                data: await getWalletHistory(contract, token)
             });
         } catch (error: any) {
             console.log(error);
@@ -674,17 +717,16 @@ async function transferBalanceAsync(contract: Contract, toAddressId: string, fro
     return "Transaction committed successfully";
 }
 
-async function getWalletHistory(contract: Contract, walletId: string): Promise<any> {
+async function getWalletHistory(contract: Contract, token: string): Promise<any> {
     console.log('\n--> Evaluate Transaction: ReadAsset, function returns asset attributes');
 
-    const resultBytes = await contract.evaluateTransaction('GetHistoryForKey', walletId);
+    const resultBytes = await contract.evaluateTransaction('GetHistoryForKey', token);
 
     const resultJson = utf8Decoder.decode(resultBytes);
     const result = JSON.parse(resultJson);
     console.log('*** Result:', result);
     return result;
 }
-
 
 async function startEventListening(network: Network): Promise<CloseableAsyncIterable<ChaincodeEvent>> {
     console.log('\n*** Start chaincode event listening');
