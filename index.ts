@@ -1,14 +1,21 @@
 import express from "express";
 import * as grpc from '@grpc/grpc-js';
-import { connect, Contract, Gateway, Identity, Signer, signers,
-    Network, ChaincodeEvent, CloseableAsyncIterable, GatewayError } from '@hyperledger/fabric-gateway';
+import {
+    connect, Contract, Gateway, Identity, Signer, signers,
+    Network, ChaincodeEvent, CloseableAsyncIterable, GatewayError
+} from '@hyperledger/fabric-gateway';
+import { BlockDecoder } from 'fabric-common';
+import * as fabproto6 from 'fabric-protos';
 import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 const { initializeApp, applicationDefault, cert } = require('firebase-admin/app');
 const { getFirestore, Timestamp, FieldValue, Filter } = require('firebase-admin/firestore');
+const ab2str = require('arraybuffer-to-string')
 const moment = require('moment');
+const asn1js = require('asn1js');
+const { createHash } = require('crypto');
 
 const app = express();
 
@@ -22,7 +29,7 @@ console.log(__dirname);
 const serviceAccount = require('/root/fabric-api/key.json');
 
 initializeApp({
-  credential: cert(serviceAccount)
+    credential: cert(serviceAccount)
 });
 
 const db = getFirestore();
@@ -68,14 +75,14 @@ app.get('/', async (req, res) => {
 
         events = await startEventListening(network);
 
-    } catch(error: any) {
+    } catch (error: any) {
         console.log(error);
         res.send({
             error: 1,
             errmsg: error.cause.details
         });
     } finally {
-        // events?.close();
+        events?.close();
     }
 });
 
@@ -139,7 +146,7 @@ app.get('/getClientAccountID', async (req, res) => {
     }
 });
 
-app.get('/getBalance',async (req, res) => {
+app.get('/getBalance', async (req, res) => {
     const token = req.query.token;
     if (token == undefined) {
         res.send({
@@ -152,10 +159,10 @@ app.get('/getBalance',async (req, res) => {
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
@@ -176,7 +183,7 @@ app.get('/getBalance',async (req, res) => {
 
 app.get('/getAllOffer', async (req, res) => {
     // const snapshot  = await db.collection('orders').where('__name__', '==', 'offer').get();
-    const snapshot  = await db.collection('offers').get();
+    const snapshot = await db.collection('offers').get();
     const data: any[] = [];
     snapshot.forEach((doc: any) => {
         const doc_data = doc.data();
@@ -185,7 +192,7 @@ app.get('/getAllOffer', async (req, res) => {
             from_value: parseInt(doc_data.from_value),
             to_value: parseInt(doc_data.to_value),
         }));
-      });
+    });
     res.send({
         error: 0,
         data
@@ -209,10 +216,10 @@ app.get('/createOffer', async (req, res) => {
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             account_id = await getClientAccountID(contract);
         } catch (error: any) {
@@ -317,6 +324,63 @@ app.get('/getAllTransfer', async (req, res) => {
     }
 });
 
+app.get('/deposit', async (req, res) => {
+    let token = req.query.token;
+    let value = req.query.value;
+
+    if (token == undefined || value == undefined) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const client = await newGrpcConnection();
+        token = token.toString();
+        value = value.toString();
+
+        const gateway = connect({
+            client,
+            identity: await newIdentity(),
+            signer: await newSigner(),
+            // Default timeouts for different gRPC calls
+            evaluateOptions: () => {
+                return { deadline: Date.now() + 5000 }; // 5 seconds
+            },
+            endorseOptions: () => {
+                return { deadline: Date.now() + 15000 }; // 15 seconds
+            },
+            submitOptions: () => {
+                return { deadline: Date.now() + 5000 }; // 5 seconds
+            },
+            commitStatusOptions: () => {
+                return { deadline: Date.now() + 60000 }; // 1 minute
+            },
+        });
+
+        //todo add check and check owner api from app
+
+        try {
+            const network = gateway.getNetwork(channelName);
+            const contract = network.getContract(chaincodeName);
+
+            // Return all the current assets on the ledger.
+            res.send({
+                error: 0,
+                data: await mint(contract, token, value)
+            });
+        } catch (error: any) {
+            console.log(error);
+            res.send({
+                error: 1,
+                errmsg: error.cause.details
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+})
+
 app.get('/mint', async (req, res) => {
     let token = req.query.token;
     let value = req.query.value;
@@ -349,14 +413,14 @@ app.get('/mint', async (req, res) => {
                 return { deadline: Date.now() + 60000 }; // 1 minute
             },
         });
-    
+
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
@@ -389,14 +453,14 @@ app.get('/transferAsset', async (req, res) => {
         assetId = assetId.toString();
         newOwner = newOwner.toString();
         const gateway = await connectGateway(client);
-    
+
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
@@ -423,7 +487,7 @@ app.get('/acceptOffer', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        const snapshot  = await db.collection('offers').where('__name__', '==', offer_id).get();
+        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).get();
         if (snapshot.docs.length == 0) {
             res.send({
                 error: 1,
@@ -439,14 +503,14 @@ app.get('/acceptOffer', async (req, res) => {
             const to_token = doc.from_token;
             const client = await newGrpcConnection();
             const gateway = await connectGateway(client);
-        
+
             try {
                 // Get a network instance representing the channel where the smart contract is deployed.
                 const network = gateway.getNetwork(channelName);
-        
+
                 // Get the smart contract from the network.
                 const contract = network.getContract(chaincodeName);
-        
+
                 // Return all the current assets on the ledger.
                 res.send({
                     error: 0,
@@ -487,14 +551,14 @@ app.get('/transferBalance', async (req, res) => {
         toToken = toToken.toString();
         const client = await newGrpcConnection();
         const gateway = await connectGateway(client);
-    
+
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
@@ -513,7 +577,6 @@ app.get('/transferBalance', async (req, res) => {
     }
 });
 
-
 app.get('/getHistory', async (req, res) => {
     let token = req.query.token;
 
@@ -526,14 +589,14 @@ app.get('/getHistory', async (req, res) => {
         const client = await newGrpcConnection();
         token = token.toString();
         const gateway = await connectGateway(client);
-    
+
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
-    
+
             // Get the smart contract from the network.
             const contract = network.getContract(chaincodeName);
-    
+
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
@@ -551,6 +614,49 @@ app.get('/getHistory', async (req, res) => {
         }
     }
 });
+
+app.get('/getBlockDetails', async (req, res) => {
+    let number = req.query.number;
+
+    if (number == undefined) {
+        res.send({
+            error: 0,
+            data: null
+        });
+    } else {
+        const client = await newGrpcConnection();
+        const gateway = await connectGateway(client);
+
+        try {
+            // Get a network instance representing the channel where the smart contract is deployed.
+            const network = gateway.getNetwork(channelName);
+
+            // Return all the current assets on the ledger.
+            res.send({
+                error: 0,
+                // data: await getBlockDetails(network, number)
+                data1: await getChainInfo(network),
+                data2: await getBlockDetails(network, number)
+            });
+        } catch (error: any) {
+            console.log(error);
+            res.send({
+                error: 1,
+                errmsg: error
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
+
+app.get('/getEncode', (req, res) => {
+    res.send({
+        error: 0,
+        data: encodeHeader()
+    });
+})
 
 // app.get('/getAllHistory', async (req, res) => {
 
@@ -623,7 +729,7 @@ async function initLedger(contract: Contract): Promise<void> {
 
     await contract.submitTransaction('InitLedger', 'token1');
     await contract.submitTransaction('InitLedger', 'token2');
-    await contract.submitTransaction('Mint', '2000', 'token2');
+    await contract.submitTransaction('Mint', '2000', 'token1');
     await contract.submitTransaction('Mint', '3000', 'token2');
 
     console.log('*** Transaction committed successfully');
@@ -661,7 +767,7 @@ async function getAllTokens(contract: Contract): Promise<any> {
  */
 async function mint(contract: Contract, token: string, value: string): Promise<string> {
     console.log('\n--> Submit Transaction: CreateAsset, creates new asset with ID, Color, Size, Owner and AppraisedValue arguments');
-    
+
     await contract.submitTransaction(
         'Mint',
         value,
@@ -670,7 +776,7 @@ async function mint(contract: Contract, token: string, value: string): Promise<s
 
     console.log('*** Transaction committed successfully');
     return "Transaction committed successfully";
-    
+
 }
 
 /**
@@ -736,6 +842,87 @@ async function startEventListening(network: Network): Promise<CloseableAsyncIter
     void readEvents(events); // Don't await - run asynchronously
     return events;
 }
+
+async function getBlockDetails(network: Network, blockNum: string): Promise<any> {
+    console.log('\n*** Start get block deteails by number');
+
+    const contract = network.getContract("qscc");
+
+    let resultBytes = await contract.evaluateTransaction("GetBlockByNumber", channelName, blockNum);
+
+    const resultJson = BlockDecoder.decode(Buffer.from(resultBytes));
+    // const resultDecoded = JSON.stringify(fabproto6.common.Block.decode(resultBytes));
+    // console.log('queryBlock', Buffer.from(resultBytes));
+    const hex_previous_hash = ab2str(resultJson.header.previous_hash, 'hex');
+    const hex_data_hash = ab2str(resultJson.header.data_hash, 'hex');
+
+    // var sequence2 = new asn1js.Sequence({
+    //     value: [
+    //       new asn1js.Integer({ value: 7 }),
+    //       new asn1js.OctetString({ valueHex: Buffer.from(resultJson.header.previous_hash, 'hex') }),
+    //       new asn1js.OctetString({ valueHex: Buffer.from(resultJson.header.data_hash, 'hex') }),
+    //     ]
+    //   });
+    // let hash = sequence2.toBER(false);
+    // let hash = createHash('sha256').update(sequence2.toBER()).digest('base64');
+
+    resultJson.header.previous_hash = ab2str(resultJson.header.previous_hash, 'base64');
+    resultJson.header.data_hash = ab2str(resultJson.header.data_hash, 'base64');
+    resultJson.header.number = resultJson.header.number.low;
+
+    console.log("header", calculateBlockHash(resultJson.header));
+    // const resultJson = utf8Decoder.decode(resultBytes);
+    // const result = JSON.parse(resultJson);
+    // console.log('*** Result:', resultJson);
+
+    return resultJson;
+}
+
+async function getChainInfo(network: Network): Promise<any> {
+    console.log('\n*** Start get getChainInfo');
+
+    const contract = network.getContract("qscc");
+
+    let resultBytes = await contract.evaluateTransaction("GetChainInfo", channelName);
+
+    const blockProto = JSON.parse(JSON.stringify(fabproto6.common.BlockchainInfo.decode(resultBytes)));
+
+    return blockProto;
+}
+
+function encodeHeader(): String {
+    var sequence2 = new asn1js.Sequence({
+        value: [
+            new asn1js.Integer({ value: 7 }),
+            new asn1js.OctetString({ valueHex: "5d819d5c5d2bf5a35185459719d594dc4f645eceb323c469b69ebf9f5f663f4a" }),
+            new asn1js.OctetString({ valueHex: "f06c07e683923f59095ff1ca90229c9a1fc7a5e5920e5328883789849f39b4da" }),
+        ]
+    });
+    return sequence2;
+}
+
+var sha = require('js-sha256');
+var asn = require('asn1.js');
+
+function calculateBlockHash(header: any) {
+    let headerAsn = asn.define('headerAsn', function () {
+        this.seq().obj(
+            this.key('Number').int(),
+            this.key('PreviousHash').octstr(),
+            this.key('DataHash').octstr()
+        );
+    });
+
+    let output = headerAsn.encode({
+        Number: parseInt(header.number),
+        PreviousHash: Buffer.from(header.previous_hash, 'hex'),
+        DataHash: Buffer.from(header.data_hash, 'hex')
+    }, 'der');
+    // let hash = createHash('sha256').update(output);
+    // let hash = sha.sha256(output);
+    let hash = ab2str(output, 'base64');
+    return hash;
+};
 
 async function readEvents(events: CloseableAsyncIterable<ChaincodeEvent>): Promise<void> {
     try {

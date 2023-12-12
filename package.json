@@ -17,8 +17,14 @@
   "dependencies": {
     "@grpc/grpc-js": "~1.7.2",
     "@hyperledger/fabric-gateway": "^1.1.1",
+    "arraybuffer-to-string": "^1.0.2",
+    "asn1": "^0.2.6",
+    "asn1js": "^3.0.5",
     "express": "^4.18.2",
+    "fabric-common": "^2.2.20",
+    "fabric-protos": "^2.2.20",
     "firebase-admin": "^11.10.1",
+    "js-sha256": "^0.10.1",
     "make": "^0.8.1",
     "moment": "^2.29.4"
   }
