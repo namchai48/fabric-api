@@ -4,7 +4,7 @@ import {
     connect, Contract, Gateway, Identity, Signer, signers,
     Network, ChaincodeEvent, CloseableAsyncIterable, GatewayError
 } from '@hyperledger/fabric-gateway';
-import { BlockDecoder } from 'fabric-common';
+// import { BlockDecoder } from 'fabric-common';
 import * as fabproto6 from 'fabric-protos';
 import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
@@ -16,13 +16,12 @@ const ab2str = require('arraybuffer-to-string')
 const moment = require('moment');
 const asn1js = require('asn1js');
 const { createHash } = require('crypto');
+const bodyParser = require('body-parser');
 
 const app = express();
 
 const channelName = envOrDefault('CHANNEL_NAME', 'mychannel');
 const chaincodeName = envOrDefault('CHAINCODE_NAME', 'token_erc20');
-const mspId = envOrDefault('MSP_ID', 'Org2MSP');
-// const mspId = envOrDefault('MSP_ID', 'Org1MSP');
 
 console.log(__dirname);
 
@@ -34,33 +33,39 @@ initializeApp({
 
 const db = getFirestore();
 
+// const mspId = envOrDefault('MSP_ID', 'Org1MSP');
+// // Path to crypto materials.
+// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
+// // Path to user private key directory.
+// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
+// // Path to user certificate.
+// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
+// // Path to peer tls certificate.
+// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
+// // Gateway peer endpoint.
+// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
+// // Gateway peer SSL host name override.
+// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
+
+const mspId = envOrDefault('MSP_ID', 'Org2MSP');
 // Path to crypto materials.
 const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
-// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
-
 // Path to user private key directory.
 const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
-// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
-
 // Path to user certificate.
 const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
-// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
-
 // Path to peer tls certificate.
 const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
-// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
-
 // Gateway peer endpoint.
 const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
-// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
-
 // Gateway peer SSL host name override.
 const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
-// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
 
 const utf8Decoder = new TextDecoder();
 // const assetId = `asset${Date.now()}`;
 
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
 app.get('/', async (req, res) => {
     res.send('Hello from express and typescript');
@@ -103,6 +108,14 @@ app.get('/init', async (req, res) => {
         res.send({
             error: 0,
             data: "Inital Assets done!"
+        })
+    } catch (error) {
+        console.log("init error: ", error);
+        gateway.close();
+        client.close();
+        res.send({
+            error: 1,
+            data: "Have already initLedger"
         })
     } finally {
         gateway.close();
@@ -199,11 +212,12 @@ app.get('/getAllOffer', async (req, res) => {
     });
 });
 
-app.get('/createOffer', async (req, res) => {
-    let from_value = req.query.from_value;
-    let from_token = req.query.from_token;
-    let to_value = req.query.to_value;
-    let to_token = req.query.to_token;
+app.post('/createOffer', async (req, res) => {
+    let from_value = req.body.from_value;
+    let from_token = req.body.from_token;
+    let to_value = req.body.to_value;
+    let to_token = req.body.to_token;
+
     if (from_value == undefined || from_token == undefined || to_value == undefined || to_token == undefined) {
         res.send({
             error: 1,
@@ -324,9 +338,10 @@ app.get('/getAllTransfer', async (req, res) => {
     }
 });
 
-app.get('/deposit', async (req, res) => {
-    let token = req.query.token;
-    let value = req.query.value;
+app.post('/deposit', async (req, res) => {
+    let token = req.body.token;
+    let value = req.body.value;
+    let points_list = req.body.points_list;
 
     if (token == undefined || value == undefined) {
         res.send({
@@ -366,7 +381,7 @@ app.get('/deposit', async (req, res) => {
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
-                data: await mint(contract, token, value)
+                data: await mint(contract, token, value, JSON.stringify(points_list))
             });
         } catch (error: any) {
             console.log(error);
@@ -424,7 +439,7 @@ app.get('/mint', async (req, res) => {
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
-                data: await mint(contract, token, value)
+                data: await mint(contract, token, value, "")
             });
         } catch (error: any) {
             console.log(error);
@@ -479,8 +494,8 @@ app.get('/transferAsset', async (req, res) => {
     }
 });
 
-app.get('/acceptOffer', async (req, res) => {
-    const offer_id = req.query.offer_id;
+app.post('/acceptOffer', async (req, res) => {
+    const offer_id = req.body.offer_id;
     if (offer_id == undefined) {
         res.send({
             error: 1,
@@ -505,6 +520,7 @@ app.get('/acceptOffer', async (req, res) => {
             const gateway = await connectGateway(client);
 
             try {
+                // console.log(account_id, from_value, to_value, from_token, to_token);
                 // Get a network instance representing the channel where the smart contract is deployed.
                 const network = gateway.getNetwork(channelName);
 
@@ -519,9 +535,10 @@ app.get('/acceptOffer', async (req, res) => {
                 await db.collection('offers').doc(offer_id).delete();
             } catch (error: any) {
                 console.log(error);
+                const errmsg = error == null ? "" : error.cause.details;
                 res.send({
                     error: 1,
-                    errmsg: error.cause.details
+                    errmsg
                 });
             } finally {
                 gateway.close();
@@ -636,7 +653,7 @@ app.get('/getBlockDetails', async (req, res) => {
                 error: 0,
                 // data: await getBlockDetails(network, number)
                 data1: await getChainInfo(network),
-                data2: await getBlockDetails(network, number)
+                data2: await getBlockDetails(network, number.toString())
             });
         } catch (error: any) {
             console.log(error);
@@ -727,10 +744,10 @@ function envOrDefault(key: string, defaultValue: string): string {
 async function initLedger(contract: Contract): Promise<void> {
     console.log('\n--> Submit Transaction: InitLedger, function creates the initial set of assets on the ledger');
 
-    await contract.submitTransaction('InitLedger', 'token1');
-    await contract.submitTransaction('InitLedger', 'token2');
-    await contract.submitTransaction('Mint', '2000', 'token1');
-    await contract.submitTransaction('Mint', '3000', 'token2');
+    await contract.submitTransaction('Initialize', "token1", "TK1");
+    await contract.submitTransaction('Initialize', 'token2', "TK2");
+    // await contract.submitTransaction('Mint', '2000', 'token1');
+    // await contract.submitTransaction('Mint', '3000', 'token2');
 
     console.log('*** Transaction committed successfully');
 }
@@ -747,8 +764,7 @@ async function getClientAccountBalance(contract: Contract, token: string): Promi
     console.log('\n--> Evaluate Transaction: ClientAccountID');
     const resultBytes = await contract.evaluateTransaction('ClientAccountBalance', token);
     const resultJson = utf8Decoder.decode(resultBytes);
-    // const result = JSON.parse(resultJson);
-    return parseInt(resultJson);
+    return JSON.parse(resultJson);
 }
 
 /**
@@ -760,18 +776,19 @@ async function getAllTokens(contract: Contract): Promise<any> {
     const resultBytes = await contract.evaluateTransaction('TokenNameList');
 
     const resultJson = utf8Decoder.decode(resultBytes);
-    return resultJson.split(",");
+    return JSON.parse(resultJson);
 }
 /**
  * Submit a transaction synchronously, blocking until it has been committed to the ledger.
  */
-async function mint(contract: Contract, token: string, value: string): Promise<string> {
-    console.log('\n--> Submit Transaction: CreateAsset, creates new asset with ID, Color, Size, Owner and AppraisedValue arguments');
+async function mint(contract: Contract, token: string, value: string, points_list: string): Promise<string> {
+    console.log('\n--> Submit Transaction: Mint to create token value and add to creater');
 
     await contract.submitTransaction(
         'Mint',
         value,
-        token
+        token,
+        points_list
     );
 
     console.log('*** Transaction committed successfully');
@@ -806,8 +823,10 @@ async function transferAssetAsync(contract: Contract, assetId: string, newOwner:
 async function transferBalanceAsync(contract: Contract, toAddressId: string, fromValue: string, toValue: string, fromToken: string, toToken: string): Promise<string> {
     console.log('\n--> Async Submit Transaction: TransferBalance, updates wallet balance');
 
+    console.log(toAddressId, fromValue.toString(), toValue.toString(), fromToken, toToken);
+
     const commit = await contract.submitAsync('Transfer', {
-        arguments: [toAddressId, fromValue, toValue, fromToken, toToken],
+        arguments: [toAddressId, fromValue.toString(), toValue.toString(), fromToken, toToken],
     });
     const oldOwner = utf8Decoder.decode(commit.getResult());
 
@@ -850,28 +869,17 @@ async function getBlockDetails(network: Network, blockNum: string): Promise<any>
 
     let resultBytes = await contract.evaluateTransaction("GetBlockByNumber", channelName, blockNum);
 
-    const resultJson = BlockDecoder.decode(Buffer.from(resultBytes));
-    // const resultDecoded = JSON.stringify(fabproto6.common.Block.decode(resultBytes));
-    // console.log('queryBlock', Buffer.from(resultBytes));
-    const hex_previous_hash = ab2str(resultJson.header.previous_hash, 'hex');
-    const hex_data_hash = ab2str(resultJson.header.data_hash, 'hex');
+    // const resultJson = BlockDecoder.decode(Buffer.from(resultBytes));
+    // // const resultDecoded = JSON.stringify(fabproto6.common.Block.decode(resultBytes));
+    // // console.log('queryBlock', Buffer.from(resultBytes));
+    // const hex_previous_hash = ab2str(resultJson.header.previous_hash, 'hex');
+    // const hex_data_hash = ab2str(resultJson.header.data_hash, 'hex');
 
-    // var sequence2 = new asn1js.Sequence({
-    //     value: [
-    //       new asn1js.Integer({ value: 7 }),
-    //       new asn1js.OctetString({ valueHex: Buffer.from(resultJson.header.previous_hash, 'hex') }),
-    //       new asn1js.OctetString({ valueHex: Buffer.from(resultJson.header.data_hash, 'hex') }),
-    //     ]
-    //   });
-    // let hash = sequence2.toBER(false);
-    // let hash = createHash('sha256').update(sequence2.toBER()).digest('base64');
+    // resultJson.header.previous_hash = ab2str(resultJson.header.previous_hash, 'base64');
+    // resultJson.header.data_hash = ab2str(resultJson.header.data_hash, 'base64');
+    // resultJson.header.number = resultJson.header.number.low;
 
-    resultJson.header.previous_hash = ab2str(resultJson.header.previous_hash, 'base64');
-    resultJson.header.data_hash = ab2str(resultJson.header.data_hash, 'base64');
-    resultJson.header.number = resultJson.header.number.low;
-
-    console.log("header", calculateBlockHash(resultJson.header));
-    // const resultJson = utf8Decoder.decode(resultBytes);
+    const resultJson = utf8Decoder.decode(resultBytes);
     // const result = JSON.parse(resultJson);
     // console.log('*** Result:', resultJson);
 
@@ -900,29 +908,6 @@ function encodeHeader(): String {
     });
     return sequence2;
 }
-
-var sha = require('js-sha256');
-var asn = require('asn1.js');
-
-function calculateBlockHash(header: any) {
-    let headerAsn = asn.define('headerAsn', function () {
-        this.seq().obj(
-            this.key('Number').int(),
-            this.key('PreviousHash').octstr(),
-            this.key('DataHash').octstr()
-        );
-    });
-
-    let output = headerAsn.encode({
-        Number: parseInt(header.number),
-        PreviousHash: Buffer.from(header.previous_hash, 'hex'),
-        DataHash: Buffer.from(header.data_hash, 'hex')
-    }, 'der');
-    // let hash = createHash('sha256').update(output);
-    // let hash = sha.sha256(output);
-    let hash = ab2str(output, 'base64');
-    return hash;
-};
 
 async function readEvents(events: CloseableAsyncIterable<ChaincodeEvent>): Promise<void> {
     try {
