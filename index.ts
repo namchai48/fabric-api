@@ -33,33 +33,33 @@ initializeApp({
 
 const db = getFirestore();
 
-// const mspId = envOrDefault('MSP_ID', 'Org1MSP');
-// // Path to crypto materials.
-// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
-// // Path to user private key directory.
-// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
-// // Path to user certificate.
-// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
-// // Path to peer tls certificate.
-// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
-// // Gateway peer endpoint.
-// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
-// // Gateway peer SSL host name override.
-// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
-
-const mspId = envOrDefault('MSP_ID', 'Org2MSP');
+const mspId = envOrDefault('MSP_ID', 'Org1MSP');
 // Path to crypto materials.
-const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
+const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
 // Path to user private key directory.
-const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
+const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
 // Path to user certificate.
-const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
+const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
 // Path to peer tls certificate.
-const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
+const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
 // Gateway peer endpoint.
-const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
+const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
 // Gateway peer SSL host name override.
-const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
+const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
+
+// const mspId = envOrDefault('MSP_ID', 'Org2MSP');
+// // Path to crypto materials.
+// const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org2.example.com'));
+// // Path to user private key directory.
+// const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'keystore'));
+// // Path to user certificate.
+// const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org2.example.com', 'msp', 'signcerts', 'cert.pem'));
+// // Path to peer tls certificate.
+// const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org2.example.com', 'tls', 'ca.crt'));
+// // Gateway peer endpoint.
+// const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:9051');
+// // Gateway peer SSL host name override.
+// const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org2.example.com');
 
 const utf8Decoder = new TextDecoder();
 // const assetId = `asset${Date.now()}`;
@@ -116,6 +116,85 @@ app.get('/init', async (req, res) => {
         res.send({
             error: 1,
             data: "Have already initLedger"
+        })
+    } finally {
+        gateway.close();
+        client.close();
+    }
+});
+
+app.get('/initMint', async (req, res) => {
+    const client = await newGrpcConnection();
+
+    const gateway = await connectGateway(client);
+
+    try {
+        // Get a network instance representing the channel where the smart contract is deployed.
+        const network = gateway.getNetwork(channelName);
+
+        // Get the smart contract from the network.
+        const contract = network.getContract(chaincodeName);
+
+        // Initialize a set of asset data on the ledger using the chaincode 'InitMint' function.
+        await initMint(contract);
+        res.send({
+            error: 0,
+            data: "Inital Assets done!"
+        })
+    } catch (error) {
+        console.log("init error: ", error);
+        gateway.close();
+        client.close();
+        res.send({
+            error: 1,
+            data: "Have already initMint"
+        })
+    } finally {
+        gateway.close();
+        client.close();
+    }
+});
+
+app.get('/testTrans', async (req, res) => {
+    let n = req.query.n?.toString();
+    const client = await newGrpcConnection();
+
+    if (n == null) {
+        n = '1';
+    }
+
+    const gateway = await connectGateway(client);
+
+    try {
+        // Get a network instance representing the channel where the smart contract is deployed.
+        const network = gateway.getNetwork(channelName);
+
+        // Get the smart contract from the network.
+        const contract = network.getContract(chaincodeName);
+
+        // Initialize a set of asset data on the ledger using the chaincode 'InitMint' function.
+        // if (parseInt(n) > 10) {
+        //     for (let i = 0; i < Math.floor(parseInt(n) / 10); i++) {
+        //         await testTrans(contract, '10');
+        //     }
+        //     if (parseInt(n) % 10 > 0) {
+        //         await testTrans(contract, (parseInt(n) % 10).toString());
+        //     }
+        // } else {
+        await testTrans(contract, n);
+        // }
+        
+        res.send({
+            error: 0,
+            data: "Inital Assets done!"
+        })
+    } catch (error) {
+        console.log("init error: ", error);
+        gateway.close();
+        client.close();
+        res.send({
+            error: 1,
+            data: "Have already initMint"
         })
     } finally {
         gateway.close();
@@ -632,6 +711,44 @@ app.get('/getHistory', async (req, res) => {
     }
 });
 
+app.get('/getHistoryWithSource', async (req, res) => {
+    let token = req.query.token;
+
+    if (token == undefined) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const client = await newGrpcConnection();
+        token = token.toString();
+        const gateway = await connectGateway(client);
+
+        try {
+            // Get a network instance representing the channel where the smart contract is deployed.
+            const network = gateway.getNetwork(channelName);
+
+            // Get the smart contract from the network.
+            const contract = network.getContract(chaincodeName);
+
+            // Return all the current assets on the ledger.
+            res.send({
+                error: 0,
+                data: await getHistoryWithSource(contract, token)
+            });
+        } catch (error: any) {
+            console.log(error);
+            res.send({
+                error: 1,
+                errmsg: error.cause.details
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
+
 app.get('/getBlockDetails', async (req, res) => {
     let number = req.query.number;
 
@@ -746,8 +863,25 @@ async function initLedger(contract: Contract): Promise<void> {
 
     await contract.submitTransaction('Initialize', "token1", "TK1");
     await contract.submitTransaction('Initialize', 'token2', "TK2");
+    await contract.submitTransaction('Initialize', 'token3', "TK3");
     // await contract.submitTransaction('Mint', '2000', 'token1');
     // await contract.submitTransaction('Mint', '3000', 'token2');
+
+    console.log('*** Transaction committed successfully');
+}
+
+async function initMint(contract: Contract): Promise<void> {
+    console.log('\n--> Submit Transaction: InitLedger, function creates the initial set of assets on the ledger');
+
+    await contract.submitTransaction('MintToAllUser', '1000');
+
+    console.log('*** Transaction committed successfully');
+}
+
+async function testTrans(contract: Contract, n: string): Promise<void> {
+    console.log('\n--> Submit Transaction: TestTransfer, function creates the transection between user');
+
+    await contract.submitTransaction('TestTransfer', n, '2');
 
     console.log('*** Transaction committed successfully');
 }
@@ -776,7 +910,8 @@ async function getAllTokens(contract: Contract): Promise<any> {
     const resultBytes = await contract.evaluateTransaction('TokenNameList');
 
     const resultJson = utf8Decoder.decode(resultBytes);
-    return JSON.parse(resultJson);
+    // return JSON.parse(resultJson);
+    return resultJson;
 }
 /**
  * Submit a transaction synchronously, blocking until it has been committed to the ledger.
@@ -846,6 +981,17 @@ async function getWalletHistory(contract: Contract, token: string): Promise<any>
     console.log('\n--> Evaluate Transaction: ReadAsset, function returns asset attributes');
 
     const resultBytes = await contract.evaluateTransaction('GetHistoryForKey', token);
+
+    const resultJson = utf8Decoder.decode(resultBytes);
+    const result = JSON.parse(resultJson);
+    console.log('*** Result:', result);
+    return result;
+}
+
+async function getHistoryWithSource(contract: Contract, token: string): Promise<any> {
+    console.log('\n--> Evaluate Transaction: ReadAsset, function returns asset attributes');
+
+    const resultBytes = await contract.evaluateTransaction('GetHistoryForKeyWithSource', token);
 
     const resultJson = utf8Decoder.decode(resultBytes);
     const result = JSON.parse(resultJson);
