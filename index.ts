@@ -18,6 +18,10 @@ const asn1js = require('asn1js');
 const { createHash } = require('crypto');
 const bodyParser = require('body-parser');
 
+const FabricCAServices = require('fabric-ca-client');
+const { User } = require('fabric-common');
+// const { Gateway, Wallets } = require('fabric-network');
+
 const app = express();
 
 const channelName = envOrDefault('CHANNEL_NAME', 'mychannel');
@@ -69,26 +73,6 @@ app.use(bodyParser.json());
 
 app.get('/', async (req, res) => {
     res.send('Hello from express and typescript');
-    const client = await newGrpcConnection();
-
-    const gateway = await connectGateway(client);
-
-    let events: CloseableAsyncIterable<ChaincodeEvent> | undefined;
-
-    try {
-        const network = gateway.getNetwork(channelName);
-
-        events = await startEventListening(network);
-
-    } catch (error: any) {
-        console.log(error);
-        res.send({
-            error: 1,
-            errmsg: error.cause.details
-        });
-    } finally {
-        events?.close();
-    }
 });
 
 app.get('/init', async (req, res) => {
@@ -791,6 +775,52 @@ app.get('/getEncode', (req, res) => {
         data: encodeHeader()
     });
 })
+
+app.post('/register', async (req, res) => {
+
+    try {
+        // Create a new CA client for interacting with the CA server
+        const caURL = 'https://localhost:7054'; // URL of the CA server
+        const ca = new FabricCAServices(caURL);
+
+        // Enroll the admin user
+        const adminId = 'admin';
+        const adminSecret = 'adminpw';
+        const enrollment = await ca.enroll({ enrollmentID: adminId, enrollmentSecret: adminSecret });
+        const identity = {
+            credentials: {
+                certificate: enrollment.certificate,
+                privateKey: enrollment.key.toBytes(),
+            },
+            mspId: 'Org1MSP', // MSP ID of the organization
+            type: 'X.509',
+        };
+
+        const user = new User(adminId);
+        await user.setEnrollment(enrollment.key, enrollment.certificate, 'Org1MSP');
+
+        // console.log(user);
+
+        // Register the new user
+        const userId = 'user2';
+        const registrationRequest = {
+            enrollmentID: userId,
+            enrollmentSecret: "user2pw",
+            affiliation: 'org1.example.com', // Affiliation within the organization
+            role: 'client', // Role of the user
+            attrs: [{ name: 'role', value: 'member' }], // Additional attributes
+        };
+        const secret = await ca.register(registrationRequest, user);
+        console.log(`Successfully registered user ${userId} with secret ${secret}`);
+
+        res.send({
+            error: 0
+        });
+    } catch (error) {
+        console.error(`Failed to register user: ${error}`);
+        process.exit(1);
+    }
+});
 
 // app.get('/getAllHistory', async (req, res) => {
 
