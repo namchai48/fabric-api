@@ -4,8 +4,6 @@ import {
     connect, Contract, Gateway, Identity, Signer, signers,
     Network, ChaincodeEvent, CloseableAsyncIterable, GatewayError
 } from '@hyperledger/fabric-gateway';
-// import { BlockDecoder } from 'fabric-common';
-import * as fabproto6 from 'fabric-protos';
 import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -18,8 +16,10 @@ const asn1js = require('asn1js');
 const { createHash } = require('crypto');
 const bodyParser = require('body-parser');
 
+import * as x509 from "@peculiar/x509";
+
 const FabricCAServices = require('fabric-ca-client');
-const { User } = require('fabric-common');
+const { User, Key } = require('fabric-common');
 // const { Gateway, Wallets } = require('fabric-network');
 
 const app = express();
@@ -37,19 +37,13 @@ initializeApp({
 
 const db = getFirestore();
 
-const mspId = envOrDefault('MSP_ID', 'Org1MSP');
-// Path to crypto materials.
-const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com'));
-// Path to user private key directory.
-const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore'));
-// Path to user certificate.
-const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts', 'cert.pem'));
-// Path to peer tls certificate.
-const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt'));
-// Gateway peer endpoint.
-const peerEndpoint = envOrDefault('PEER_ENDPOINT', 'localhost:7051');
-// Gateway peer SSL host name override.
-const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.org1.example.com');
+const peerHostList = [
+    { org: 'org1.example.com', host: 'localhost:7051', msp: 'Org1MSP'},
+    { org: 'org2.example.com', host: 'localhost:9051', msp: 'Org2MSP'},
+    { org: 'org3.example.com', host: 'localhost:11051', msp: 'Org3MSP'}];
+const caHostList = ['localhost:7054', 'localhost:9054', 'localhost:11054'];
+
+const caURL = 'https://localhost:7054'; // URL of the CA server for org 1
 
 // const mspId = envOrDefault('MSP_ID', 'Org2MSP');
 // // Path to crypto materials.
@@ -71,167 +65,116 @@ const utf8Decoder = new TextDecoder();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-app.get('/', async (req, res) => {
+app.post('/', async (req, res) => {
     res.send('Hello from express and typescript');
 });
 
-app.get('/init', async (req, res) => {
-    const client = await newGrpcConnection();
+// app.post('/init', async (req, res) => {
+//     const client = await newGrpcConnection();
 
-    const gateway = await connectGateway(client);
+//     const gateway = await connectGateway(client);
 
-    try {
-        // Get a network instance representing the channel where the smart contract is deployed.
-        const network = gateway.getNetwork(channelName);
+//     try {
+//         // Get a network instance representing the channel where the smart contract is deployed.
+//         const network = gateway.getNetwork(channelName);
 
-        // Get the smart contract from the network.
-        const contract = network.getContract(chaincodeName);
+//         // Get the smart contract from the network.
+//         const contract = network.getContract(chaincodeName);
 
-        // Initialize a set of asset data on the ledger using the chaincode 'InitLedger' function.
-        await initLedger(contract);
-        res.send({
-            error: 0,
-            data: "Inital Assets done!"
-        })
-    } catch (error) {
-        console.log("init error: ", error);
-        gateway.close();
-        client.close();
-        res.send({
-            error: 1,
-            data: "Have already initLedger"
-        })
-    } finally {
-        gateway.close();
-        client.close();
-    }
-});
+//         // Initialize a set of asset data on the ledger using the chaincode 'InitLedger' function.
+//         await initLedger(contract);
+//         res.send({
+//             error: 0,
+//             data: "Inital Assets done!"
+//         })
+//     } catch (error) {
+//         console.log("init error: ", error);
+//         gateway.close();
+//         client.close();
+//         res.send({
+//             error: 1,
+//             data: "Have already initLedger"
+//         })
+//     } finally {
+//         gateway.close();
+//         client.close();
+//     }
+// });
 
-app.get('/initMint', async (req, res) => {
-    const client = await newGrpcConnection();
-
-    const gateway = await connectGateway(client);
-
-    try {
-        // Get a network instance representing the channel where the smart contract is deployed.
-        const network = gateway.getNetwork(channelName);
-
-        // Get the smart contract from the network.
-        const contract = network.getContract(chaincodeName);
-
-        // Initialize a set of asset data on the ledger using the chaincode 'InitMint' function.
-        await initMint(contract);
-        res.send({
-            error: 0,
-            data: "Inital Assets done!"
-        })
-    } catch (error) {
-        console.log("init error: ", error);
-        gateway.close();
-        client.close();
+app.post('/login', async (req, res) => {
+    const username = req.body.username;
+    const password = req.body.password;
+    if (username == null || password == null) {
         res.send({
             error: 1,
-            data: "Have already initMint"
-        })
-    } finally {
-        gateway.close();
-        client.close();
-    }
-});
-
-app.get('/testTrans', async (req, res) => {
-    let n = req.query.n?.toString();
-    const client = await newGrpcConnection();
-
-    if (n == null) {
-        n = '1';
-    }
-
-    const gateway = await connectGateway(client);
-
-    try {
-        // Get a network instance representing the channel where the smart contract is deployed.
-        const network = gateway.getNetwork(channelName);
-
-        // Get the smart contract from the network.
-        const contract = network.getContract(chaincodeName);
-
-        // Initialize a set of asset data on the ledger using the chaincode 'InitMint' function.
-        // if (parseInt(n) > 10) {
-        //     for (let i = 0; i < Math.floor(parseInt(n) / 10); i++) {
-        //         await testTrans(contract, '10');
-        //     }
-        //     if (parseInt(n) % 10 > 0) {
-        //         await testTrans(contract, (parseInt(n) % 10).toString());
-        //     }
-        // } else {
-        await testTrans(contract, n);
-        // }
-        
-        res.send({
-            error: 0,
-            data: "Inital Assets done!"
-        })
-    } catch (error) {
-        console.log("init error: ", error);
-        gateway.close();
-        client.close();
-        res.send({
-            error: 1,
-            data: "Have already initMint"
-        })
-    } finally {
-        gateway.close();
-        client.close();
-    }
-});
-
-app.get('/getUserDetails', async (req, res) => {
-    const identity = await newIdentity();
-    const x509 = new crypto.X509Certificate(identity.credentials);
-    res.send({
-        error: 0,
-        data: x509.toLegacyObject()
-    });
-});
-
-app.get('/getClientAccountID', async (req, res) => {
-    const client = await newGrpcConnection();
-    const gateway = await connectGateway(client);
-    try {
-        // Get a network instance representing the channel where the smart contract is deployed.
-        const network = gateway.getNetwork(channelName);
-
-        // Get the smart contract from the network.
-        const contract = network.getContract(chaincodeName);
-
-        // Return all the current assets on the ledger.
-        res.send({
-            error: 0,
-            data: await getClientAccountID(contract)
-        });
-    } catch (error: any) {
-        console.log(error);
-        res.send({
-            error: 1,
-            errmsg: error.cause.details
-        });
-    } finally {
-        gateway.close();
-        client.close();
-    }
-});
-
-app.get('/getBalance', async (req, res) => {
-    const token = req.query.token;
-    if (token == undefined) {
-        res.send({
-            error: 1,
-            errmsg: "Missing some variables."
+            message: 'Parameters are missing.'
         });
     } else {
-        const client = await newGrpcConnection();
-        const gateway = await connectGateway(client);
+        const passEncode = createHash('sha256')
+            .update(password)
+            .digest('hex');
+        console.log(username, passEncode);
+        const snapshot = await db.collection('user').where('username', '==', username).where('password', '==', passEncode).get();
+        let userDetails = null;
+        // console.log(snapshot);
+        snapshot.forEach((doc: any) => {
+            userDetails = Object.assign(doc.data(), {
+                id: doc.id,
+            })
+        });
+        if (userDetails == null) {
+            res.send({
+                error: 1,
+                message: 'Authorization failure.'
+            });
+        } else {
+            res.send({
+                error: 0,
+                data: userDetails
+            });
+        }
+        // const ca = new FabricCAServices(caURL);
+        // const enrollment = await ca.enroll({ enrollmentID: username, enrollmentSecret: password });
+        // const identity = {
+        //     credentials: {
+        //         certificate: enrollment.certificate,
+        //         privateKey: enrollment.key.toBytes(),
+        //     },
+        //     mspId: 'Org1MSP', // MSP ID of the organization
+        //     type: 'X.509',
+        // };
+        // res.send({
+        //     error: 0,
+        //     data: userDetails
+        // });
+    }
+});
+
+// app.post('/getUserDetails', async (req, res) => {
+//     // const username = req.body.username;
+//     // const password = req.body.password;
+//     // const identity = await getCredentials(username, password);
+//     // const cert = new x509.X509Certificate(identity.credentials.certificate);
+//     const identity = await newIdentity();
+//     const x509 = new crypto.X509Certificate(identity.credentials);
+//     // console.log(cert.subject); // CN=Test, O=PeculiarVentures LLC
+//     res.send({
+//         error: 0,
+//         data: x509
+//     });
+// });
+
+app.post('/getClientAccountID', async (req, res) => {
+    const account_id = req.body.account_id;
+    const account = getUserAndOrg(account_id);
+    if (account.org == null || account.user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authen fail."
+        });
+    } else {
+        const client = await newGrpcConnection(account.org);
+        const gateway = await connectGateway(client, account.user, account.org);
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
@@ -242,7 +185,7 @@ app.get('/getBalance', async (req, res) => {
             // Return all the current assets on the ledger.
             res.send({
                 error: 0,
-                data: await getClientAccountBalance(contract, token.toString())
+                data: await getClientAccountID(contract)
             });
         } catch (error: any) {
             console.log(error);
@@ -257,9 +200,58 @@ app.get('/getBalance', async (req, res) => {
     }
 });
 
-app.get('/getAllOffer', async (req, res) => {
-    // const snapshot  = await db.collection('orders').where('__name__', '==', 'offer').get();
-    const snapshot = await db.collection('offers').get();
+app.post('/getBalance', async (req, res) => {
+    const account_id = req.body.account_id;
+    const token = req.body.token;
+    if (account_id == null || token == null) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authen fail."
+            });
+        } else {
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+    
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+    
+                // Return all the current assets on the ledger.
+                res.send({
+                    error: 0,
+                    data: await getClientAccountBalance(contract, token.toString())
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 1,
+                    errmsg: error.cause.details
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
+        }
+    }
+});
+
+app.post('/getAllOffer', async (req, res) => {
+    const token = req.body.token;
+    let snapshot: any[] = [];
+    if (token == null) {
+        snapshot = await db.collection('offers').get();
+    } else {
+        snapshot = await db.collection('offers').where('from_token', '==', token).get();
+    }
     const data: any[] = [];
     snapshot.forEach((doc: any) => {
         const doc_data = doc.data();
@@ -275,7 +267,44 @@ app.get('/getAllOffer', async (req, res) => {
     });
 });
 
+app.post('/getMyOffer', async (req, res) => {
+    const account_id = req.body.account_id;
+    const token = req.body.token;
+    if (account_id == null || token == null) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const data: any[] = [];
+        const snapshot = await db.collection('offers').where('account_id', '==', account_id).where('from_token', '==', token).get();
+        snapshot.forEach((doc: any) => {
+            const doc_data = doc.data();
+            data.push(Object.assign(doc.data(), {
+                id: doc.id,
+                from_value: parseInt(doc_data.from_value),
+                to_value: parseInt(doc_data.to_value),
+            }));
+        });
+        res.send({
+            error: 0,
+            data
+        });
+    }
+});
+
+app.post('/deleteOffer', async (req, res) => {
+    const doc_id = req.body.id;
+    if (doc_id != null) {
+        await db.collection('offers').doc(doc_id).delete();
+    }
+    res.send({
+        error: 0
+    });
+})
+
 app.post('/createOffer', async (req, res) => {
+    let account_id = req.body.account_id;
     let from_value = req.body.from_value;
     let from_token = req.body.from_token;
     let to_value = req.body.to_value;
@@ -287,9 +316,71 @@ app.post('/createOffer', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        const client = await newGrpcConnection();
-        const gateway = await connectGateway(client);
-        let account_id;
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authen fail."
+            });
+        } else {
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+
+            } catch (error: any) {
+                console.log(error);
+            } finally {
+                gateway.close();
+                client.close();
+            }
+            if (account_id == undefined) {
+                res.send({
+                    error: 1,
+                    errmsg: "Can't find account id."
+                });
+            } else {
+                // const identity = await newIdentity();
+                // const x509 = new crypto.X509Certificate(identity.credentials);
+                // const accountDetails = x509.toLegacyObject();
+                // const org = accountDetails.subject.O;
+                // const user = accountDetails.subject.CN;
+                const docRef = db.collection('offers').doc();
+                await docRef.set({
+                    account_id,
+                    from_token,
+                    from_value,
+                    to_token,
+                    to_value,
+                    org: account.org,
+                    user: account.user,
+                    created: moment().format("YYYY-MM-DD HH:mm:ss")
+                });
+                res.send({
+                    error: 0
+                });
+            }
+        }
+    }
+});
+
+app.post('/getAllTokens', async (req, res) => {
+    let account_id = req.body.account_id;
+    const account = getUserAndOrg(account_id);
+    if (account.org == null || account.user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authen fail."
+        });
+    } else {
+        const client = await newGrpcConnection(account.org);
+
+        const gateway = await connectGateway(client, account.user, account.org);
+
         try {
             // Get a network instance representing the channel where the smart contract is deployed.
             const network = gateway.getNetwork(channelName);
@@ -298,106 +389,67 @@ app.post('/createOffer', async (req, res) => {
             const contract = network.getContract(chaincodeName);
 
             // Return all the current assets on the ledger.
-            account_id = await getClientAccountID(contract);
-        } catch (error: any) {
-            console.log(error);
+            res.send({
+                error: 0,
+                data: await getAllTokens(contract)
+            });
+
         } finally {
             gateway.close();
             client.close();
         }
-        if (account_id == undefined) {
-            res.send({
-                error: 1,
-                errmsg: "Can't find account id."
-            });
-        } else {
-            const identity = await newIdentity();
-            const x509 = new crypto.X509Certificate(identity.credentials);
-            const accountDetails = x509.toLegacyObject();
-            const org = accountDetails.subject.O;
-            const user = accountDetails.subject.CN;
-            const docRef = db.collection('offers').doc();
-            await docRef.set({
-                account_id,
-                from_token,
-                from_value,
-                to_token,
-                to_value,
-                org,
-                user,
-                created: moment().format("YYYY-MM-DD HH:mm:ss")
-            });
-            res.send({
-                error: 0
-            });
-        }
     }
 });
 
-app.get('/getAllTokens', async (req, res) => {
-    const client = await newGrpcConnection();
-
-    const gateway = await connectGateway(client);
-
-    try {
-        // Get a network instance representing the channel where the smart contract is deployed.
-        const network = gateway.getNetwork(channelName);
-
-        // Get the smart contract from the network.
-        const contract = network.getContract(chaincodeName);
-
-        // Return all the current assets on the ledger.
+app.post('/getAllTransfer', async (req, res) => {
+    let account_id = req.body.account_id;
+    const account = getUserAndOrg(account_id);
+    if (account.org == null || account.user == null) {
         res.send({
-            error: 0,
-            data: await getAllTokens(contract)
+            error: 1,
+            errmsg: "Authen fail."
         });
+    } else {
+        const client = await newGrpcConnection(account.org);
 
-    } finally {
-        gateway.close();
-        client.close();
-    }
-});
+        const gateway = await connectGateway(client, account.user, account.org);
 
-app.get('/getAllTransfer', async (req, res) => {
-    const client = await newGrpcConnection();
-
-    const gateway = await connectGateway(client);
-
-    try {
-        const network = gateway.getNetwork(channelName);
-        const contract = network.getContract(chaincodeName);
-        const token_list = await getAllTokens(contract);
-        const all_transection = [];
-        for (let i = 0; i < token_list.length; i++) {
-            const token = token_list[i]
-            const data = await getWalletHistory(contract, token);
-            all_transection.push(...data.map((row: any) => Object.assign(row, { token })))
-        }
-        const all_transfer: any = [];
-        all_transection.forEach(transection => {
-            const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
-            if (transfer != undefined) {
-                if (transection.tx_amount < 0) {
-                    Object.assign(transfer, { from: transection })
-                } else {
-                    Object.assign(transfer, { to: transection })
-                }
-            } else {
-                const data = {
-                    tx_id: transection.tx_id,
-                    from: transection.tx_amount < 0 ? transection : null,
-                    to: transection.tx_amount > 0 ? transection : null
-                }
-                all_transfer.push(data);
+        try {
+            const network = gateway.getNetwork(channelName);
+            const contract = network.getContract(chaincodeName);
+            const token_list = await getAllTokens(contract);
+            const all_transection = [];
+            for (let i = 0; i < token_list.length; i++) {
+                const token = token_list[i]
+                const data = await getWalletHistory(contract, token);
+                all_transection.push(...data.map((row: any) => Object.assign(row, { token })))
             }
-        });
-        res.send({
-            error: 0,
-            data: all_transfer
-        });
-    } finally {
-        gateway.close();
-        client.close();
+            const all_transfer: any = [];
+            all_transection.forEach(transection => {
+                const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
+                if (transfer != undefined) {
+                    if (transection.tx_amount < 0) {
+                        Object.assign(transfer, { from: transection })
+                    } else {
+                        Object.assign(transfer, { to: transection })
+                    }
+                } else {
+                    const data = {
+                        tx_id: transection.tx_id,
+                        from: transection.tx_amount < 0 ? transection : null,
+                        to: transection.tx_amount > 0 ? transection : null
+                    }
+                    all_transfer.push(data);
+                }
+            });
+            res.send({
+                error: 0,
+                data: all_transfer
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
     }
 });
 
@@ -412,152 +464,47 @@ app.post('/deposit', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        const client = await newGrpcConnection();
-        token = token.toString();
-        value = value.toString();
-
-        const gateway = connect({
-            client,
-            identity: await newIdentity(),
-            signer: await newSigner(),
-            // Default timeouts for different gRPC calls
-            evaluateOptions: () => {
-                return { deadline: Date.now() + 5000 }; // 5 seconds
-            },
-            endorseOptions: () => {
-                return { deadline: Date.now() + 15000 }; // 15 seconds
-            },
-            submitOptions: () => {
-                return { deadline: Date.now() + 5000 }; // 5 seconds
-            },
-            commitStatusOptions: () => {
-                return { deadline: Date.now() + 60000 }; // 1 minute
-            },
-        });
-
-        //todo add check and check owner api from app
-
-        try {
-            const network = gateway.getNetwork(channelName);
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await mint(contract, token, value, JSON.stringify(points_list))
-            });
-        } catch (error: any) {
-            console.log(error);
+        let account_id = req.body.account_id;
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: error.cause.details
+                errmsg: "Authen fail."
             });
-        } finally {
-            gateway.close();
-            client.close();
+        } else {
+            const client = await newGrpcConnection(account.org);
+            token = token.toString();
+            value = value.toString();
+
+            const gateway = await connectGateway(client, account.user, account.org);
+
+            //todo add check and check owner api from app
+
+            try {
+                const network = gateway.getNetwork(channelName);
+                const contract = network.getContract(chaincodeName);
+
+                // Return all the current assets on the ledger.
+                res.send({
+                    error: 0,
+                    data: await mint(contract, token, value, JSON.stringify(points_list))
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 1,
+                    errmsg: error.cause.details
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
         }
     }
 })
 
-app.get('/mint', async (req, res) => {
-    let token = req.query.token;
-    let value = req.query.value;
-
-    if (token == undefined || value == undefined) {
-        res.send({
-            error: 1,
-            errmsg: "Missing some variables."
-        });
-    } else {
-        const client = await newGrpcConnection();
-        token = token.toString();
-        value = value.toString();
-
-        const gateway = connect({
-            client,
-            identity: await newIdentity(),
-            signer: await newSigner(),
-            // Default timeouts for different gRPC calls
-            evaluateOptions: () => {
-                return { deadline: Date.now() + 5000 }; // 5 seconds
-            },
-            endorseOptions: () => {
-                return { deadline: Date.now() + 15000 }; // 15 seconds
-            },
-            submitOptions: () => {
-                return { deadline: Date.now() + 5000 }; // 5 seconds
-            },
-            commitStatusOptions: () => {
-                return { deadline: Date.now() + 60000 }; // 1 minute
-            },
-        });
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await mint(contract, token, value, "")
-            });
-        } catch (error: any) {
-            console.log(error);
-            res.send({
-                error: 1,
-                errmsg: error.cause.details
-            });
-        } finally {
-            gateway.close();
-            client.close();
-        }
-    }
-});
-
-app.get('/transferAsset', async (req, res) => {
-    let assetId = req.query.assetId;
-    let newOwner = req.query.newOwner;
-
-    if (assetId == undefined || newOwner == undefined) {
-        res.send({
-            error: 1,
-            errmsg: "Missing some variables."
-        });
-    } else {
-        const client = await newGrpcConnection();
-        assetId = assetId.toString();
-        newOwner = newOwner.toString();
-        const gateway = await connectGateway(client);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await transferAssetAsync(contract, assetId, newOwner)
-            });
-        } catch (error: any) {
-            console.log(error);
-            res.send({
-                error: 1,
-                errmsg: error.cause.details
-            });
-        } finally {
-            gateway.close();
-            client.close();
-        }
-    }
-});
-
 app.post('/acceptOffer', async (req, res) => {
+    let account_id = req.body.account_id;
     const offer_id = req.body.offer_id;
     if (offer_id == undefined) {
         res.send({
@@ -565,25 +512,82 @@ app.post('/acceptOffer', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).get();
-        if (snapshot.docs.length == 0) {
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: `Can't find offer id ${offer_id}`
+                errmsg: "Authen fail."
             });
         } else {
-            // Backward from to between user who create offer and accept offer
-            const doc = snapshot.docs[0].data();
-            const account_id = doc.account_id;
-            const from_value = doc.to_value;
-            const from_token = doc.to_token;
-            const to_value = doc.from_value;
-            const to_token = doc.from_token;
-            const client = await newGrpcConnection();
-            const gateway = await connectGateway(client);
+            const snapshot = await db.collection('offers').where('__name__', '==', offer_id).get();
+            if (snapshot.docs.length == 0) {
+                res.send({
+                    error: 1,
+                    errmsg: `Can't find offer id ${offer_id}`
+                });
+            } else {
+                // Backward from to between user who create offer and accept offer
+                const doc = snapshot.docs[0].data();
+                const from_account_id = doc.account_id;
+                const from_value = doc.to_value;
+                const from_token = doc.to_token;
+                const to_value = doc.from_value;
+                const to_token = doc.from_token;
+                const client = await newGrpcConnection(account.org);
+                const gateway = await connectGateway(client, account.user, account.org);
+
+                try {
+                    // console.log(account_id, from_value, to_value, from_token, to_token);
+                    // Get a network instance representing the channel where the smart contract is deployed.
+                    const network = gateway.getNetwork(channelName);
+
+                    // Get the smart contract from the network.
+                    const contract = network.getContract(chaincodeName);
+
+                    // Return all the current assets on the ledger.
+                    res.send({
+                        error: 0,
+                        data: await transferBalanceAsync(contract, from_account_id, from_value, to_value, from_token, to_token)
+                    });
+                    await db.collection('offers').doc(offer_id).delete();
+                } catch (error: any) {
+                    console.log(error);
+                    const errmsg = error == null ? "" : error.cause.details;
+                    res.send({
+                        error: 1,
+                        errmsg
+                    });
+                } finally {
+                    gateway.close();
+                    client.close();
+                }
+            }
+        }
+    }
+});
+
+app.post('/getHistory', async (req, res) => {
+    let token = req.body.token;
+    let account_id = req.body.account_id;
+
+    if (token == undefined) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authen fail."
+            });
+        } else {
+            const client = await newGrpcConnection(account.org);
+            token = token.toString();
+            const gateway = await connectGateway(client, account.user, account.org);
 
             try {
-                // console.log(account_id, from_value, to_value, from_token, to_token);
                 // Get a network instance representing the channel where the smart contract is deployed.
                 const network = gateway.getNetwork(channelName);
 
@@ -593,15 +597,13 @@ app.post('/acceptOffer', async (req, res) => {
                 // Return all the current assets on the ledger.
                 res.send({
                     error: 0,
-                    data: await transferBalanceAsync(contract, account_id, from_value, to_value, from_token, to_token)
+                    data: await getWalletHistory(contract, token)
                 });
-                await db.collection('offers').doc(offer_id).delete();
             } catch (error: any) {
                 console.log(error);
-                const errmsg = error == null ? "" : error.cause.details;
                 res.send({
                     error: 1,
-                    errmsg
+                    errmsg: error.cause.details
                 });
             } finally {
                 gateway.close();
@@ -611,54 +613,9 @@ app.post('/acceptOffer', async (req, res) => {
     }
 });
 
-app.get('/transferBalance', async (req, res) => {
-    let toAddressId = req.query.toAddressId;
-    let fromValue = req.query.fromValue;
-    let fromToken = req.query.fromToken;
-    let toValue = req.query.toValue;
-    let toToken = req.query.toToken;
-
-    if (toAddressId == undefined || fromValue == undefined || fromToken == undefined || toValue == undefined || toToken == undefined) {
-        res.send({
-            error: 1,
-            errmsg: "Missing some variables."
-        });
-    } else {
-        toAddressId = toAddressId.toString();
-        fromValue = fromValue.toString();
-        fromToken = fromToken.toString();
-        toValue = toValue.toString();
-        toToken = toToken.toString();
-        const client = await newGrpcConnection();
-        const gateway = await connectGateway(client);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await transferBalanceAsync(contract, toAddressId, fromValue, toValue, fromToken, toToken)
-            });
-        } catch (error: any) {
-            console.log(error);
-            res.send({
-                error: 1,
-                errmsg: error.cause.details
-            });
-        } finally {
-            gateway.close();
-            client.close();
-        }
-    }
-});
-
-app.get('/getHistory', async (req, res) => {
-    let token = req.query.token;
+app.post('/getHistoryWithSource', async (req, res) => {
+    let token = req.body.token;
+    let account_id = req.body.account_id;
 
     if (token == undefined) {
         res.send({
@@ -666,75 +623,46 @@ app.get('/getHistory', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        const client = await newGrpcConnection();
-        token = token.toString();
-        const gateway = await connectGateway(client);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await getWalletHistory(contract, token)
-            });
-        } catch (error: any) {
-            console.log(error);
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: error.cause.details
+                errmsg: "Authen fail."
             });
-        } finally {
-            gateway.close();
-            client.close();
+        } else {
+            const client = await newGrpcConnection(account.org);
+            token = token.toString();
+            const gateway = await connectGateway(client, account.user, account.org);
+
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+
+                // Return all the current assets on the ledger.
+                res.send({
+                    error: 0,
+                    data: await getHistoryWithSource(contract, token)
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 1,
+                    errmsg: error.cause.details
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
         }
     }
 });
 
-app.get('/getHistoryWithSource', async (req, res) => {
-    let token = req.query.token;
-
-    if (token == undefined) {
-        res.send({
-            error: 1,
-            errmsg: "Missing some variables."
-        });
-    } else {
-        const client = await newGrpcConnection();
-        token = token.toString();
-        const gateway = await connectGateway(client);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                data: await getHistoryWithSource(contract, token)
-            });
-        } catch (error: any) {
-            console.log(error);
-            res.send({
-                error: 1,
-                errmsg: error.cause.details
-            });
-        } finally {
-            gateway.close();
-            client.close();
-        }
-    }
-});
-
-app.get('/getBlockDetails', async (req, res) => {
-    let number = req.query.number;
+app.post('/getBlockDetails', async (req, res) => {
+    let number = req.body.number;
+    let account_id = req.body.account_id;
 
     if (number == undefined) {
         res.send({
@@ -742,39 +670,38 @@ app.get('/getBlockDetails', async (req, res) => {
             data: null
         });
     } else {
-        const client = await newGrpcConnection();
-        const gateway = await connectGateway(client);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Return all the current assets on the ledger.
-            res.send({
-                error: 0,
-                // data: await getBlockDetails(network, number)
-                data1: await getChainInfo(network),
-                data2: await getBlockDetails(network, number.toString())
-            });
-        } catch (error: any) {
-            console.log(error);
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: error
+                errmsg: "Authen fail."
             });
-        } finally {
-            gateway.close();
-            client.close();
+        } else {
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+
+                // Return all the current assets on the ledger.
+                res.send({
+                    error: 0,
+                    data: await getBlockDetails(network, number.toString())
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 1,
+                    errmsg: error
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
         }
     }
 });
-
-app.get('/getEncode', (req, res) => {
-    res.send({
-        error: 0,
-        data: encodeHeader()
-    });
-})
 
 app.post('/register', async (req, res) => {
 
@@ -822,52 +749,16 @@ app.post('/register', async (req, res) => {
     }
 });
 
-// app.get('/getAllHistory', async (req, res) => {
-
-//     const client = await newGrpcConnection();
-//     const gateway = await connectGateway(client);
-
-//     try {
-//         // Get a network instance representing the channel where the smart contract is deployed.
-//         const network = gateway.getNetwork(channelName);
-
-//         // Get the smart contract from the network.
-//         const contract = network.getContract(chaincodeName);
-
-//         const allAsset = await getAllAssets(contract);
-//         console.log("allAsset", allAsset);
-//         let allHistory: any[] = [];
-//         for (let i = 0 ; i < allAsset.length; i++) {
-//             allHistory = allHistory.concat(await getWalletHistory(contract, allAsset[i].ID));
-//         }
-//         allHistory.sort((a,b) => b.Timestamp.localeCompare(a.Timestamp));
-
-//         // Return all the current assets on the ledger.
-//         res.send({
-//             error: 0,
-//             data: allHistory
-//         });
-//     } catch (error: any) {
-//         console.log(error);
-//         res.send({
-//             error: 1,
-//             errmsg: error.cause.details
-//         });
-//     } finally {
-//         gateway.close();
-//         client.close();
-//     }
-// });
-
 const port = process.env.PORT || 3001
 
 app.listen(port, () => console.log(`App listening on PORT ${port}`))
 
-async function connectGateway(client: any): Promise<Gateway> {
+async function connectGateway(client: any, user: string, org: string): Promise<Gateway> {
     return connect({
         client,
-        identity: await newIdentity(),
-        signer: await newSigner(),
+        // identity: { mspId, credentials: Buffer.from(certificate) },
+        identity: await newIdentity(user, org),
+        signer: await newSigner(user, org),
         // Default timeouts for different gRPC calls
         evaluateOptions: () => {
             return { deadline: Date.now() + 5000 }; // 5 seconds
@@ -896,22 +787,6 @@ async function initLedger(contract: Contract): Promise<void> {
     await contract.submitTransaction('Initialize', 'token3', "TK3");
     // await contract.submitTransaction('Mint', '2000', 'token1');
     // await contract.submitTransaction('Mint', '3000', 'token2');
-
-    console.log('*** Transaction committed successfully');
-}
-
-async function initMint(contract: Contract): Promise<void> {
-    console.log('\n--> Submit Transaction: InitLedger, function creates the initial set of assets on the ledger');
-
-    await contract.submitTransaction('MintToAllUser', '1000');
-
-    console.log('*** Transaction committed successfully');
-}
-
-async function testTrans(contract: Contract, n: string): Promise<void> {
-    console.log('\n--> Submit Transaction: TestTransfer, function creates the transection between user');
-
-    await contract.submitTransaction('TestTransfer', n, '2');
 
     console.log('*** Transaction committed successfully');
 }
@@ -1062,29 +937,6 @@ async function getBlockDetails(network: Network, blockNum: string): Promise<any>
     return resultJson;
 }
 
-async function getChainInfo(network: Network): Promise<any> {
-    console.log('\n*** Start get getChainInfo');
-
-    const contract = network.getContract("qscc");
-
-    let resultBytes = await contract.evaluateTransaction("GetChainInfo", channelName);
-
-    const blockProto = JSON.parse(JSON.stringify(fabproto6.common.BlockchainInfo.decode(resultBytes)));
-
-    return blockProto;
-}
-
-function encodeHeader(): String {
-    var sequence2 = new asn1js.Sequence({
-        value: [
-            new asn1js.Integer({ value: 7 }),
-            new asn1js.OctetString({ valueHex: "5d819d5c5d2bf5a35185459719d594dc4f645eceb323c469b69ebf9f5f663f4a" }),
-            new asn1js.OctetString({ valueHex: "f06c07e683923f59095ff1ca90229c9a1fc7a5e5920e5328883789849f39b4da" }),
-        ]
-    });
-    return sequence2;
-}
-
 async function readEvents(events: CloseableAsyncIterable<ChaincodeEvent>): Promise<void> {
     try {
         for await (let event of events) {
@@ -1106,7 +958,35 @@ function parseJson(jsonBytes: Uint8Array): unknown {
     return JSON.parse(json);
 }
 
-async function newGrpcConnection(): Promise<grpc.Client> {
+function getUserAndOrg(account_id: string) {
+    const myArray = account_id.split('::');
+    let user = null;
+    let org = null;
+    myArray[1].split('/').forEach((row: string) => {
+        const value = row.split('=');
+        if (value[0] == 'CN') {
+            user = value[1];
+        }
+    });
+    myArray[2].split('/').forEach((row: string) => {
+        const value = row.split('=');
+        if (value[0] == 'O') {
+            org = value[1];
+        }
+    });
+    return { user, org }
+}
+
+async function newGrpcConnection(orgName: string): Promise<grpc.Client> {
+    let host = peerHostList.find(row => row.org == orgName)?.host;
+    if (host == undefined) {
+        host = '';
+    }
+    // Path to crypto materials.
+    const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', orgName));
+    const tlsCertPath = envOrDefault('TLS_CERT_PATH', path.resolve(cryptoPath, 'peers', 'peer0.' + orgName, 'tls', 'ca.crt'));
+    const peerEndpoint = envOrDefault('PEER_ENDPOINT', host);
+    const peerHostAlias = envOrDefault('PEER_HOST_ALIAS', 'peer0.' + orgName);
     const tlsRootCert = await fs.readFile(tlsCertPath);
     const tlsCredentials = grpc.credentials.createSsl(tlsRootCert);
     return new grpc.Client(peerEndpoint, tlsCredentials, {
@@ -1114,15 +994,39 @@ async function newGrpcConnection(): Promise<grpc.Client> {
     });
 }
 
-async function newIdentity(): Promise<Identity> {
+async function newIdentity(user: string, orgName: string): Promise<Identity> {
+    const camelUser = user.charAt(0).toUpperCase() + user.slice(1).toLowerCase();
+    let msp = peerHostList.find(row => row.org == orgName)?.msp;
+    if (msp == undefined) {
+        msp = '';
+    }
+    const mspId = envOrDefault('MSP_ID', msp);
+    const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', orgName));
+    const certPath = envOrDefault('CERT_PATH', path.resolve(cryptoPath, 'users', camelUser + '@' + orgName, 'msp', 'signcerts', 'cert.pem'));
     const credentials = await fs.readFile(certPath);
     return { mspId, credentials };
 }
 
-async function newSigner(): Promise<Signer> {
+async function newSigner(user: string, orgName: string): Promise<Signer> {
+    const camelUser = user.charAt(0).toUpperCase() + user.slice(1).toLowerCase();
+    const cryptoPath = envOrDefault('CRYPTO_PATH', path.resolve(__dirname, '..', '..', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', orgName));
+    const keyDirectoryPath = envOrDefault('KEY_DIRECTORY_PATH', path.resolve(cryptoPath, 'users', camelUser + '@' + orgName, 'msp', 'keystore'));
     const files = await fs.readdir(keyDirectoryPath);
     const keyPath = path.resolve(keyDirectoryPath, files[0]);
     const privateKeyPem = await fs.readFile(keyPath);
     const privateKey = crypto.createPrivateKey(privateKeyPem);
     return signers.newPrivateKeySigner(privateKey);
+}
+
+async function getCredentials(username: String, password: String) {
+    const ca = new FabricCAServices(caURL);
+    const enrollment = await ca.enroll({ enrollmentID: username, enrollmentSecret: password });
+    return {
+        credentials: {
+            certificate: enrollment.certificate,
+            privateKey: enrollment.key.toBytes(),
+        },
+        mspId: 'Org1MSP', // MSP ID of the organization
+        type: 'X.509',
+    };
 }
