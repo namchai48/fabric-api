@@ -15,14 +15,22 @@ const moment = require('moment');
 const asn1js = require('asn1js');
 const { createHash } = require('crypto');
 const bodyParser = require('body-parser');
+const axios = require('axios');
+const cors = require('cors');
+const morgan = require("morgan");
 
 import * as x509 from "@peculiar/x509";
+import e from "express";
 
 const FabricCAServices = require('fabric-ca-client');
 const { User, Key } = require('fabric-common');
 // const { Gateway, Wallets } = require('fabric-network');
 
 const app = express();
+
+app.use(cors());
+const morganFormat = ':remote-addr - :remote-user [:date[iso]] ":method :url HTTP/:http-version" :status :res[content-length] (:response-time ms) ":referrer" ":user-agent"';
+app.use(morgan(morganFormat));
 
 const channelName = envOrDefault('CHANNEL_NAME', 'mychannel');
 const chaincodeName = envOrDefault('CHAINCODE_NAME', 'token_erc20');
@@ -69,37 +77,46 @@ app.post('/', async (req, res) => {
     res.send('Hello from express and typescript');
 });
 
-// app.post('/init', async (req, res) => {
-//     const client = await newGrpcConnection();
+app.post('/init', async (req, res) => {
+    const account_id = req.body.account_id;
+    const account = getUserAndOrg(account_id);
+    if (account.org == null || account.user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const client = await newGrpcConnection(account.org);
 
-//     const gateway = await connectGateway(client);
+        const gateway = await connectGateway(client, account.user, account.org);
 
-//     try {
-//         // Get a network instance representing the channel where the smart contract is deployed.
-//         const network = gateway.getNetwork(channelName);
+        try {
+            // Get a network instance representing the channel where the smart contract is deployed.
+            const network = gateway.getNetwork(channelName);
 
-//         // Get the smart contract from the network.
-//         const contract = network.getContract(chaincodeName);
+            // Get the smart contract from the network.
+            const contract = network.getContract(chaincodeName);
 
-//         // Initialize a set of asset data on the ledger using the chaincode 'InitLedger' function.
-//         await initLedger(contract);
-//         res.send({
-//             error: 0,
-//             data: "Inital Assets done!"
-//         })
-//     } catch (error) {
-//         console.log("init error: ", error);
-//         gateway.close();
-//         client.close();
-//         res.send({
-//             error: 1,
-//             data: "Have already initLedger"
-//         })
-//     } finally {
-//         gateway.close();
-//         client.close();
-//     }
-// });
+            // Initialize a set of asset data on the ledger using the chaincode 'InitLedger' function.
+            await initLedger(contract);
+            res.send({
+                error: 0,
+                data: "Inital Assets done!"
+            })
+        } catch (error) {
+            console.log("init error: ", error);
+            gateway.close();
+            client.close();
+            res.send({
+                error: 1,
+                data: "Have already initLedger"
+            })
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
 
 app.post('/login', async (req, res) => {
     const username = req.body.username;
@@ -107,15 +124,15 @@ app.post('/login', async (req, res) => {
     if (username == null || password == null) {
         res.send({
             error: 1,
-            message: 'Parameters are missing.'
+            errmsg: 'Parameters are missing.'
         });
     } else {
         const passEncode = createHash('sha256')
             .update(password)
             .digest('hex');
-        console.log(username, passEncode);
+        // console.log(username, passEncode);
         const snapshot = await db.collection('user').where('username', '==', username).where('password', '==', passEncode).get();
-        let userDetails = null;
+        let userDetails: any = null;
         // console.log(snapshot);
         snapshot.forEach((doc: any) => {
             userDetails = Object.assign(doc.data(), {
@@ -125,9 +142,10 @@ app.post('/login', async (req, res) => {
         if (userDetails == null) {
             res.send({
                 error: 1,
-                message: 'Authorization failure.'
+                errmsg: 'Authorization failure.'
             });
         } else {
+            delete userDetails?.password;
             res.send({
                 error: 0,
                 data: userDetails
@@ -170,7 +188,7 @@ app.post('/getClientAccountID', async (req, res) => {
     if (account.org == null || account.user == null) {
         res.send({
             error: 1,
-            errmsg: "Authen fail."
+            errmsg: "Authorization failure."
         });
     } else {
         const client = await newGrpcConnection(account.org);
@@ -213,7 +231,51 @@ app.post('/getBalance', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
+            });
+        } else {
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+    
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+    
+                // Return all the current assets on the ledger.
+                res.send({
+                    error: 0,
+                    data: await getClientAccountBalance(contract, token.toString())
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 1,
+                    errmsg: error.cause.details
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
+        }
+    }
+});
+
+app.post('/getBalanceAllToken', async (req, res) => {
+    const account_id = req.body.account_id;
+    const token = req.body.token;
+    if (!account_id || !token) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authorization failure."
             });
         } else {
             const client = await newGrpcConnection(account.org);
@@ -320,7 +382,7 @@ app.post('/createOffer', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
             const client = await newGrpcConnection(account.org);
@@ -370,33 +432,42 @@ app.post('/createOffer', async (req, res) => {
 
 app.post('/getAllTokens', async (req, res) => {
     let account_id = req.body.account_id;
-    const account = getUserAndOrg(account_id);
-    if (account.org == null || account.user == null) {
+    if (!account_id) {
         res.send({
             error: 1,
-            errmsg: "Authen fail."
+            errmsg: "Missing some variables."
         });
     } else {
-        const client = await newGrpcConnection(account.org);
-
-        const gateway = await connectGateway(client, account.user, account.org);
-
-        try {
-            // Get a network instance representing the channel where the smart contract is deployed.
-            const network = gateway.getNetwork(channelName);
-
-            // Get the smart contract from the network.
-            const contract = network.getContract(chaincodeName);
-
-            // Return all the current assets on the ledger.
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
             res.send({
-                error: 0,
-                data: await getAllTokens(contract)
+                error: 1,
+                errmsg: "Authorization failure."
             });
-
-        } finally {
-            gateway.close();
-            client.close();
+        } else {
+            const client = await newGrpcConnection(account.org);
+    
+            const gateway = await connectGateway(client, account.user, account.org);
+    
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+    
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+    
+                // Return all the current assets on the ledger.
+                const tokenName = await getAllTokens(contract);
+                const data = tokenName.split(',');
+                res.send({
+                    error: 0,
+                    data
+                });
+    
+            } finally {
+                gateway.close();
+                client.close();
+            }
         }
     }
 });
@@ -407,7 +478,7 @@ app.post('/getAllTransfer', async (req, res) => {
     if (account.org == null || account.user == null) {
         res.send({
             error: 1,
-            errmsg: "Authen fail."
+            errmsg: "Authorization failure."
         });
     } else {
         const client = await newGrpcConnection(account.org);
@@ -454,9 +525,10 @@ app.post('/getAllTransfer', async (req, res) => {
 });
 
 app.post('/deposit', async (req, res) => {
+    let account_id = req.body.account_id;
     let token = req.body.token;
     let value = req.body.value;
-    let points_list = req.body.points_list;
+    // let points_list = req.body.points_list;
 
     if (token == undefined || value == undefined) {
         res.send({
@@ -464,44 +536,166 @@ app.post('/deposit', async (req, res) => {
             errmsg: "Missing some variables."
         });
     } else {
-        let account_id = req.body.account_id;
         const account = getUserAndOrg(account_id);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
-            const client = await newGrpcConnection(account.org);
-            token = token.toString();
-            value = value.toString();
-
-            const gateway = await connectGateway(client, account.user, account.org);
-
-            //todo add check and check owner api from app
-
-            try {
-                const network = gateway.getNetwork(channelName);
-                const contract = network.getContract(chaincodeName);
-
-                // Return all the current assets on the ledger.
-                res.send({
-                    error: 0,
-                    data: await mint(contract, token, value, JSON.stringify(points_list))
-                });
-            } catch (error: any) {
-                console.log(error);
+            let data: any = null;
+            const snapshot = await db.collection('organization').where('token_name', '==', token).get();
+            snapshot.forEach((doc: any) => {
+                data = doc.data();
+            });
+            if (data == null) {
                 res.send({
                     error: 1,
-                    errmsg: error.cause.details
+                    errmsg: "Can't get organization details"
                 });
-            } finally {
-                gateway.close();
-                client.close();
+            } else {
+                // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
+                const postData = {
+                    token: data.access_token,
+                    value
+                };
+                const url = data.url_deposit;
+                const response = await axios.post(url, postData);
+                let points_list: any[] = [];
+                if (response.data != null) {
+                    points_list = response.data.points_list;
+                }
+    
+                if(points_list != null && points_list.length > 0 ) {
+                    // Check exchange account points
+    
+                    const client = await newGrpcConnection(account.org);
+                    token = token.toString();
+                    value = value.toString();
+    
+                    const gateway = await connectGateway(client, account.user, account.org);
+    
+                    try {
+    
+                        //todo add check and check owner api from app
+                        const network = gateway.getNetwork(channelName);
+                        const contract = network.getContract(chaincodeName);
+    
+                        // Return all the current assets on the ledger.
+                        res.send({
+                            error: 0,
+                            data: await mint(contract, token, value, JSON.stringify(points_list))
+                        });
+                    } catch (error: any) {
+                        console.log(error);
+                        res.send({
+                            error: 1,
+                            errmsg: error.cause.details
+                        });
+                    } finally {
+                        gateway.close();
+                        client.close();
+                    }
+                } else {
+                    res.send({
+                        error: 1,
+                        errmsg: "Can't get user points"
+                    });
+                }
+            }
+            
+        }
+    }
+});
+
+app.post('/withdraw', async (req, res) => {
+    let account_id = req.body.account_id;
+    let token = req.body.token;
+    let value = req.body.value;
+    // let points_list = req.body.points_list;
+
+    if (token == undefined || value == undefined) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(account_id);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authorization failure."
+            });
+        } else {
+            let data: any = null;
+            const snapshot = await db.collection('organization').where('token_name', '==', token).get();
+            snapshot.forEach((doc: any) => {
+                data = doc.data();
+            });
+            if (data == null) {
+                res.send({
+                    error: 1,
+                    errmsg: "Can't get organization details"
+                });
+            } else {
+                // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
+                const postData = {
+                    token: data.access_token,
+                    value
+                };
+                const url = data.url_withdraw;
+                let result: any = null;
+                try {
+                    const response = await axios.post(url, postData);
+                    if (response.data != null) {
+                        result = response.data.result;
+                    }
+                } catch (error) {
+                    console.log(error);
+                    res.send({
+                        error: 1,
+                        errmsg: "Can't withdraw points"
+                    });
+                }
+
+                if (result != null) {
+                    const client = await newGrpcConnection(account.org);
+                    token = token.toString();
+                    value = value.toString();
+    
+                    const gateway = await connectGateway(client, account.user, account.org);
+    
+                    try {
+    
+                        //todo add check and check owner api from app
+                        const network = gateway.getNetwork(channelName);
+                        const contract = network.getContract(chaincodeName);
+    
+                        // Return all the current assets on the ledger.
+                        res.send({
+                            error: 0,
+                            data: await withdraw(contract, token, value)
+                        });
+                    } catch (error: any) {
+                        console.log(error);
+                        res.send({
+                            error: 1,
+                            errmsg: error.cause.details
+                        });
+                    } finally {
+                        gateway.close();
+                        client.close();
+                    }
+                } else {
+                    res.send({
+                        error: 1,
+                        errmsg: "Can't withdraw points"
+                    });
+                }
             }
         }
     }
-})
+});
 
 app.post('/acceptOffer', async (req, res) => {
     let account_id = req.body.account_id;
@@ -516,7 +710,7 @@ app.post('/acceptOffer', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
             const snapshot = await db.collection('offers').where('__name__', '==', offer_id).get();
@@ -580,7 +774,7 @@ app.post('/getHistory', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
             const client = await newGrpcConnection(account.org);
@@ -627,7 +821,7 @@ app.post('/getHistoryWithSource', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
             const client = await newGrpcConnection(account.org);
@@ -674,7 +868,7 @@ app.post('/getBlockDetails', async (req, res) => {
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authen fail."
+                errmsg: "Authorization failure."
             });
         } else {
             const client = await newGrpcConnection(account.org);
@@ -829,6 +1023,23 @@ async function mint(contract: Contract, token: string, value: string, points_lis
         value,
         token,
         points_list
+    );
+
+    console.log('*** Transaction committed successfully');
+    return "Transaction committed successfully";
+
+}
+
+/**
+ * Submit a transaction synchronously, blocking until it has been committed to the ledger.
+ */
+async function withdraw(contract: Contract, token: string, value: string): Promise<string> {
+    console.log('\n--> Submit Transaction: Withdraw to decease token value and brun from platform');
+
+    await contract.submitTransaction(
+        'Withdraw',
+        value,
+        token
     );
 
     console.log('*** Transaction committed successfully');
