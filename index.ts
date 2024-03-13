@@ -78,14 +78,21 @@ app.post('/', async (req, res) => {
 });
 
 app.post('/init', async (req, res) => {
-    const account_id = req.body.account_id;
-    const account = getUserAndOrg(account_id);
-    if (account.org == null || account.user == null) {
+    const user_id = req.body.user_id;
+    const access_token = req.body.access_token;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
         res.send({
             error: 1,
             errmsg: "Authorization failure."
         });
+    } else if (access_token == null) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
     } else {
+        const account = getUserAndOrg(user.certificate);
         const client = await newGrpcConnection(account.org);
 
         const gateway = await connectGateway(client, account.user, account.org);
@@ -256,18 +263,18 @@ app.post('/getBalanceByOrg', async (req, res) => {
     
                 // Return all the current assets on the ledger.
                 const data = await getClientAccountBalance(contract, organization.token_name)
-                Object.assign(data, {
-                    token_name: organization.token_name,
-                    org_name: organization.name
-                })
                 res.send({
                     error: 0,
+                    token_name: organization.token_name,
+                    org_name: organization.name,
                     data
                 });
             } catch (error: any) {
                 console.log(error);
                 res.send({
                     error: 0,
+                    token_name: organization.token_name,
+                    org_name: organization.name,
                     data: null
                 });
             } finally {
@@ -682,7 +689,7 @@ app.post('/deposit', async (req, res) => {
                 errmsg: "Can't get organization details"
             });
         } else {
-            // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
+            // todo add function check token in my offer list and change remain amount
             const postData = {
                 token: user_org_token,
                 value
@@ -743,18 +750,23 @@ app.post('/deposit', async (req, res) => {
 });
 
 app.post('/withdraw', async (req, res) => {
-    let account_id = req.body.account_id;
+    const user_id = req.body.user_id;
+    const user_org_token = req.body.user_org_token;
     let token = req.body.token;
     let value = req.body.value;
-    // let points_list = req.body.points_list;
-
-    if (token == undefined || value == undefined) {
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (token == null) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
@@ -774,15 +786,15 @@ app.post('/withdraw', async (req, res) => {
             } else {
                 // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
                 const postData = {
-                    token: data.access_token,
+                    token: user_org_token,
                     value
                 };
                 const url = data.url_withdraw;
-                let result: any = null;
+                let error: any = null;
                 try {
                     const response = await axios.post(url, postData);
                     if (response.data != null) {
-                        result = response.data.result;
+                        error = response.data.error;
                     }
                 } catch (error) {
                     console.log(error);
@@ -792,9 +804,8 @@ app.post('/withdraw', async (req, res) => {
                     });
                 }
 
-                if (result != null) {
+                if (error == 0) {
                     const client = await newGrpcConnection(account.org);
-                    token = token.toString();
                     value = value.toString();
     
                     const gateway = await connectGateway(client, account.user, account.org);
