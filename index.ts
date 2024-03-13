@@ -218,16 +218,82 @@ app.post('/getClientAccountID', async (req, res) => {
     }
 });
 
-app.post('/getBalance', async (req, res) => {
-    const account_id = req.body.account_id;
-    const token = req.body.token;
-    if (account_id == null || token == null) {
+app.post('/getBalanceByOrg', async (req, res) => {
+    const user_id = req.body.user_id;
+    const access_token = req.body.access_token;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (access_token == null) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        let organization: any = null;
+        const snapshot = await db.collection('organization').where('access_token', '==', access_token).get();
+        snapshot.forEach((doc: any) => {
+            organization = doc.data();
+        });
+        const account = getUserAndOrg(user.certificate);
+        if (account.org == null || account.user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authorization failure."
+            });
+        } else {
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+    
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+    
+                // Return all the current assets on the ledger.
+                const data = await getClientAccountBalance(contract, organization.token_name)
+                Object.assign(data, {
+                    token_name: organization.token_name,
+                    org_name: organization.name
+                })
+                res.send({
+                    error: 0,
+                    data
+                });
+            } catch (error: any) {
+                console.log(error);
+                res.send({
+                    error: 0,
+                    data: null
+                });
+            } finally {
+                gateway.close();
+                client.close();
+            }
+        }
+    }
+})
+
+app.post('/getBalance', async (req, res) => {
+    const user_id = req.body.user_id;
+    const token = req.body.token;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (token == null) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
@@ -251,8 +317,8 @@ app.post('/getBalance', async (req, res) => {
             } catch (error: any) {
                 console.log(error);
                 res.send({
-                    error: 1,
-                    errmsg: error.cause.details
+                    error: 0,
+                    data: null
                 });
             } finally {
                 gateway.close();
@@ -307,39 +373,56 @@ app.post('/getBalanceAllToken', async (req, res) => {
 });
 
 app.post('/getAllOffer', async (req, res) => {
+    const user_id = req.body.user_id;
     const token = req.body.token;
-    let snapshot: any[] = [];
-    if (token == null) {
-        snapshot = await db.collection('offers').get();
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
     } else {
-        snapshot = await db.collection('offers').where('from_token', '==', token).get();
+        let snapshot: any[] = [];
+        if (user == null || token == null) {
+            snapshot = await db.collection('offers').get();
+        } else {
+            snapshot = await db.collection('offers').where('from_token', '==', token).get();
+        }
+        const data: any[] = [];
+        snapshot.forEach((doc: any) => {
+            const doc_data = doc.data();
+            if (doc_data.account_id != user.certificate) {
+                data.push(Object.assign(doc.data(), {
+                    id: doc.id,
+                    from_value: parseInt(doc_data.from_value),
+                    to_value: parseInt(doc_data.to_value),
+                }));
+            }
+        });
+        res.send({
+            error: 0,
+            data
+        });
     }
-    const data: any[] = [];
-    snapshot.forEach((doc: any) => {
-        const doc_data = doc.data();
-        data.push(Object.assign(doc.data(), {
-            id: doc.id,
-            from_value: parseInt(doc_data.from_value),
-            to_value: parseInt(doc_data.to_value),
-        }));
-    });
-    res.send({
-        error: 0,
-        data
-    });
 });
 
 app.post('/getMyOffer', async (req, res) => {
-    const account_id = req.body.account_id;
+    const user_id = req.body.user_id;
     const token = req.body.token;
-    if (account_id == null || token == null) {
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (token == null) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
         const data: any[] = [];
-        const snapshot = await db.collection('offers').where('account_id', '==', account_id).where('from_token', '==', token).get();
+        const snapshot = await db.collection('offers').where('account_id', '==', user.certificate).where('from_token', '==', token).get();
         snapshot.forEach((doc: any) => {
             const doc_data = doc.data();
             data.push(Object.assign(doc.data(), {
@@ -431,24 +514,24 @@ app.post('/createOffer', async (req, res) => {
 });
 
 app.post('/getAllTokens', async (req, res) => {
-    let account_id = req.body.account_id;
-    if (!account_id) {
+    const user_id = req.body.user_id;
+    if (!user_id) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
-        if (account.org == null || account.user == null) {
+        const user = await getUserDetails(user_id);
+        if (user == null) {
             res.send({
                 error: 1,
-                errmsg: "Authorization failure."
+                errmsg: `Can't find offer id ${user_id}`
             });
         } else {
+            const account_id = user.certificate;
+            const account = getUserAndOrg(account_id);
             const client = await newGrpcConnection(account.org);
-    
             const gateway = await connectGateway(client, account.user, account.org);
-    
             try {
                 // Get a network instance representing the channel where the smart contract is deployed.
                 const network = gateway.getNetwork(channelName);
@@ -524,73 +607,118 @@ app.post('/getAllTransfer', async (req, res) => {
     }
 });
 
-app.post('/deposit', async (req, res) => {
-    let account_id = req.body.account_id;
-    let token = req.body.token;
-    let value = req.body.value;
-    // let points_list = req.body.points_list;
-
-    if (token == undefined || value == undefined) {
+app.post('/getUserPoints', async (req, res) => {
+    const access_token = req.body.access_token;
+    const org_token = req.body.org_token;
+    if (!access_token || !org_token) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
-        if (account.org == null || account.user == null) {
+        let organization: any = null;
+        const snapshot = await db.collection('organization').where('access_token', '==', access_token).get();
+        snapshot.forEach((doc: any) => {
+            organization = doc.data();
+        });
+        if (organization == null) {
             res.send({
                 error: 1,
-                errmsg: "Authorization failure."
+                errmsg: "Can't get organization details"
             });
         } else {
-            let data: any = null;
-            const snapshot = await db.collection('organization').where('token_name', '==', token).get();
-            snapshot.forEach((doc: any) => {
-                data = doc.data();
-            });
-            if (data == null) {
+            try {
+                const postData = {
+                    token: org_token,
+                };
+                const url = organization.url_ex_account_points;
+                const response = await axios.post(url, postData);
+                let data: any = null;
+                if (response.data != null) {
+                    data = response.data.data;
+                    Object.assign(data, { org_name: organization.name });
+                }
+                res.send({
+                    error: 0,
+                    data
+                });
+            } catch (error) {
+                console.log(error);
                 res.send({
                     error: 1,
-                    errmsg: "Can't get organization details"
+                    errmsg: error
                 });
-            } else {
-                // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
-                const postData = {
-                    token: data.access_token,
-                    value
-                };
+            }
+        }
+    }
+})
+
+app.post('/deposit', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user_org_token = req.body.user_org_token;
+    const token = req.body.token;
+    let value = req.body.value;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (token == null) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const account = getUserAndOrg(user.certificate);
+        let data: any = null;
+        const snapshot = await db.collection('organization').where('token_name', '==', token).get();
+        snapshot.forEach((doc: any) => {
+            data = doc.data();
+        });
+        if (data == null) {
+            res.send({
+                error: 1,
+                errmsg: "Can't get organization details"
+            });
+        } else {
+            // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
+            const postData = {
+                token: user_org_token,
+                value
+            };
+            try {
                 const url = data.url_deposit;
                 const response = await axios.post(url, postData);
                 let points_list: any[] = [];
                 if (response.data != null) {
                     points_list = response.data.points_list;
                 }
-    
-                if(points_list != null && points_list.length > 0 ) {
+
+                if (points_list != null && points_list.length > 0) {
                     // Check exchange account points
-    
+
                     const client = await newGrpcConnection(account.org);
-                    token = token.toString();
                     value = value.toString();
-    
+
                     const gateway = await connectGateway(client, account.user, account.org);
-    
+
                     try {
-    
+
                         //todo add check and check owner api from app
                         const network = gateway.getNetwork(channelName);
                         const contract = network.getContract(chaincodeName);
-    
+
                         // Return all the current assets on the ledger.
                         res.send({
                             error: 0,
                             data: await mint(contract, token, value, JSON.stringify(points_list))
                         });
-                    } catch (error: any) {
-                        console.log(error);
+                    } catch (error2: any) {
+                        console.log(error2.cause.details);
                         res.send({
                             error: 1,
-                            errmsg: error.cause.details
+                            errmsg: error2.cause.details
                         });
                     } finally {
                         gateway.close();
@@ -602,6 +730,12 @@ app.post('/deposit', async (req, res) => {
                         errmsg: "Can't get user points"
                     });
                 }
+            } catch (error: any) {
+                console.log(error.message);
+                res.send({
+                    error: 1,
+                    errmsg: error.message
+                });
             }
             
         }
@@ -979,8 +1113,6 @@ async function initLedger(contract: Contract): Promise<void> {
     await contract.submitTransaction('Initialize', "token1", "TK1");
     await contract.submitTransaction('Initialize', 'token2', "TK2");
     await contract.submitTransaction('Initialize', 'token3', "TK3");
-    // await contract.submitTransaction('Mint', '2000', 'token1');
-    // await contract.submitTransaction('Mint', '3000', 'token2');
 
     console.log('*** Transaction committed successfully');
 }
@@ -1171,8 +1303,8 @@ function parseJson(jsonBytes: Uint8Array): unknown {
 
 function getUserAndOrg(account_id: string) {
     const myArray = account_id.split('::');
-    let user = null;
-    let org = null;
+    let user = '';
+    let org = '';
     myArray[1].split('/').forEach((row: string) => {
         const value = row.split('=');
         if (value[0] == 'CN') {
@@ -1186,6 +1318,15 @@ function getUserAndOrg(account_id: string) {
         }
     });
     return { user, org }
+}
+
+async function getUserDetails(user_id: string): Promise<any> {
+    const snapshot = await db.collection('user').where('__name__', '==', user_id).get();
+    let user = null;
+    snapshot.forEach((doc: any) => {
+        user = doc.data();
+    });
+    return user;
 }
 
 async function newGrpcConnection(orgName: string): Promise<grpc.Client> {
