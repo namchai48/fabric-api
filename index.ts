@@ -175,20 +175,6 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// app.post('/getUserDetails', async (req, res) => {
-//     // const username = req.body.username;
-//     // const password = req.body.password;
-//     // const identity = await getCredentials(username, password);
-//     // const cert = new x509.X509Certificate(identity.credentials.certificate);
-//     const identity = await newIdentity();
-//     const x509 = new crypto.X509Certificate(identity.credentials);
-//     // console.log(cert.subject); // CN=Test, O=PeculiarVentures LLC
-//     res.send({
-//         error: 0,
-//         data: x509
-//     });
-// });
-
 app.post('/getClientAccountID', async (req, res) => {
     const account_id = req.body.account_id;
     const account = getUserAndOrg(account_id);
@@ -335,16 +321,16 @@ app.post('/getBalance', async (req, res) => {
     }
 });
 
-app.post('/getBalanceAllToken', async (req, res) => {
-    const account_id = req.body.account_id;
-    const token = req.body.token;
-    if (!account_id || !token) {
+app.post('/getAllBalance', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
         res.send({
             error: 1,
-            errmsg: "Missing some variables."
+            errmsg: "Authorization failure."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
@@ -360,10 +346,28 @@ app.post('/getBalanceAllToken', async (req, res) => {
                 // Get the smart contract from the network.
                 const contract = network.getContract(chaincodeName);
     
+                const tokenName = await getAllTokens(contract);
+                const tokenNameList = tokenName.split(',');
+
+                const data: any = [];
+                for (let i = 0; i < tokenNameList.length; i++) {
+                    const token = tokenNameList[i];
+                    let balanceDetails = {
+                        token_name: token,
+                        details: null
+                    };
+                    try {
+                        balanceDetails.details = await getClientAccountBalance(contract, token)
+                    } catch (error: any) {
+                        console.log(error.message);
+                    }
+                    data.push(balanceDetails)
+                }
+
                 // Return all the current assets on the ledger.
                 res.send({
                     error: 0,
-                    data: await getClientAccountBalance(contract, token.toString())
+                    data
                 });
             } catch (error: any) {
                 console.log(error);
@@ -398,9 +402,9 @@ app.post('/getAllOffer', async (req, res) => {
         const data: any[] = [];
         snapshot.forEach((doc: any) => {
             const doc_data = doc.data();
-            if (doc_data.account_id != user.certificate) {
+            if (doc_data.from_user_id != user_id) {
                 data.push(Object.assign(doc.data(), {
-                    id: doc.id,
+                    offer_id: doc.id,
                     from_value: parseInt(doc_data.from_value),
                     to_value: parseInt(doc_data.to_value),
                 }));
@@ -416,24 +420,18 @@ app.post('/getAllOffer', async (req, res) => {
 app.post('/getMyOffer', async (req, res) => {
     const user_id = req.body.user_id;
     const token = req.body.token;
-    const user = await getUserDetails(user_id);
-    if (user == null) {
-        res.send({
-            error: 1,
-            errmsg: "Authorization failure."
-        });
-    } else if (token == null) {
+    if (user_id == null || token == null) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
         const data: any[] = [];
-        const snapshot = await db.collection('offers').where('account_id', '==', user.certificate).where('from_token', '==', token).get();
+        const snapshot = await db.collection('offers').where('from_user_id', '==', user_id).where('from_token', '==', token).get();
         snapshot.forEach((doc: any) => {
             const doc_data = doc.data();
             data.push(Object.assign(doc.data(), {
-                id: doc.id,
+                offer_id: doc.id,
                 from_value: parseInt(doc_data.from_value),
                 to_value: parseInt(doc_data.to_value),
             }));
@@ -445,30 +443,20 @@ app.post('/getMyOffer', async (req, res) => {
     }
 });
 
-app.post('/deleteOffer', async (req, res) => {
-    const doc_id = req.body.id;
-    if (doc_id != null) {
-        await db.collection('offers').doc(doc_id).delete();
-    }
-    res.send({
-        error: 0
-    });
-})
-
 app.post('/createOffer', async (req, res) => {
-    let account_id = req.body.account_id;
+    let from_user_id = req.body.from_user_id;
     let from_value = req.body.from_value;
     let from_token = req.body.from_token;
     let to_value = req.body.to_value;
     let to_token = req.body.to_token;
-
     if (from_value == undefined || from_token == undefined || to_value == undefined || to_token == undefined) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        const user = await getUserDetails(from_user_id);
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
@@ -484,41 +472,64 @@ app.post('/createOffer', async (req, res) => {
                 // Get the smart contract from the network.
                 const contract = network.getContract(chaincodeName);
 
+                const balanceDetails = await getClientAccountBalance(contract, from_token)
+                if (balanceDetails.balance >= from_value) {
+                    const docRef = db.collection('offers').doc();
+                    await docRef.set({
+                        from_user_id,
+                        from_token,
+                        from_value,
+                        to_token,
+                        to_value,
+                        org: account.org,
+                        user: account.user,
+                        email: user.email,
+                        created: moment().format("YYYY-MM-DD HH:mm:ss")
+                    });
+                    res.send({
+                        error: 0
+                    });
+                } else {
+                    res.send({
+                        error: 1,
+                        errmsg: "Not enough token."
+                    });
+                }
             } catch (error: any) {
                 console.log(error);
             } finally {
                 gateway.close();
                 client.close();
             }
-            if (account_id == undefined) {
-                res.send({
-                    error: 1,
-                    errmsg: "Can't find account id."
-                });
-            } else {
-                // const identity = await newIdentity();
-                // const x509 = new crypto.X509Certificate(identity.credentials);
-                // const accountDetails = x509.toLegacyObject();
-                // const org = accountDetails.subject.O;
-                // const user = accountDetails.subject.CN;
-                const docRef = db.collection('offers').doc();
-                await docRef.set({
-                    account_id,
-                    from_token,
-                    from_value,
-                    to_token,
-                    to_value,
-                    org: account.org,
-                    user: account.user,
-                    created: moment().format("YYYY-MM-DD HH:mm:ss")
-                });
-                res.send({
-                    error: 0
-                });
-            }
+            
         }
     }
 });
+
+app.post('/deleteOffer', async (req, res) => {
+    const user_id = req.body.user_id;
+    const offer_id = req.body.offer_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).where('user_id', '==', user_id).get();
+        if (snapshot._size > 0) {
+            await db.collection('offers').doc(offer_id).delete();
+            res.send({
+                error: 0,
+            });
+        } else {
+            res.send({
+                error: 1,
+                errmsg: `Can't find offer id ${offer_id}`
+            });
+        }
+    }
+})
 
 app.post('/getAllTokens', async (req, res) => {
     const user_id = req.body.user_id;
@@ -532,7 +543,7 @@ app.post('/getAllTokens', async (req, res) => {
         if (user == null) {
             res.send({
                 error: 1,
-                errmsg: `Can't find offer id ${user_id}`
+                errmsg: "Authorization failure."
             });
         } else {
             const account_id = user.certificate;
@@ -562,15 +573,17 @@ app.post('/getAllTokens', async (req, res) => {
     }
 });
 
-app.post('/getAllTransfer', async (req, res) => {
-    let account_id = req.body.account_id;
-    const account = getUserAndOrg(account_id);
-    if (account.org == null || account.user == null) {
+// For show deposit and withdraw
+app.post('/getAllConvert', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
         res.send({
             error: 1,
             errmsg: "Authorization failure."
         });
     } else {
+        const account = getUserAndOrg(user.certificate);
         const client = await newGrpcConnection(account.org);
 
         const gateway = await connectGateway(client, account.user, account.org);
@@ -578,15 +591,78 @@ app.post('/getAllTransfer', async (req, res) => {
         try {
             const network = gateway.getNetwork(channelName);
             const contract = network.getContract(chaincodeName);
-            const token_list = await getAllTokens(contract);
-            const all_transection = [];
+            const tokenName = await getAllTokens(contract);
+            const token_list = tokenName.split(',');
+            const all_transection: any = [];
+
+            const allOrgList: any = []
+            const snapshot = await db.collection('organization').get();
+            snapshot.forEach((doc: any) => {
+                allOrgList.push(doc.data());
+            });
+
             for (let i = 0; i < token_list.length; i++) {
                 const token = token_list[i]
                 const data = await getWalletHistory(contract, token);
-                all_transection.push(...data.map((row: any) => Object.assign(row, { token })))
+                data.forEach((row: any) => {
+                    delete row.cheques
+                    Object.assign(row, { 
+                        token,
+                        organization: allOrgList.find((org: any) => org.token_name == token).name,
+                        timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
+                    })
+                    if (row.tx_account == '0x0') {
+                        all_transection.push(row)
+                    }
+                })
+            }
+            res.send({
+                error: 0,
+                data: all_transection
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
+
+app.post('/getAllTransfer', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const account = getUserAndOrg(user.certificate);
+        const client = await newGrpcConnection(account.org);
+
+        const gateway = await connectGateway(client, account.user, account.org);
+
+        try {
+            const network = gateway.getNetwork(channelName);
+            const contract = network.getContract(chaincodeName);
+            const tokenName = await getAllTokens(contract);
+            const token_list = tokenName.split(',');
+            const all_transection: any = [];
+            for (let i = 0; i < token_list.length; i++) {
+                const token = token_list[i]
+                const data = await getWalletHistory(contract, token);
+                data.forEach((row: any) => {
+                    delete row.cheques
+                    Object.assign(row, { 
+                        token,
+                        timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
+                    })
+                    if (row.tx_account != '0x0') {
+                        all_transection.push(row)
+                    }
+                })
             }
             const all_transfer: any = [];
-            all_transection.forEach(transection => {
+            all_transection.forEach((transection: any) => {
                 const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
                 if (transfer != undefined) {
                     if (transection.tx_amount < 0) {
@@ -906,16 +982,21 @@ app.post('/acceptOffer', async (req, res) => {
 });
 
 app.post('/getHistory', async (req, res) => {
-    let token = req.body.token;
-    let account_id = req.body.account_id;
-
-    if (token == undefined) {
+    const user_id = req.body.user_id;
+    const token = req.body.token;
+    const user = await getUserDetails(user_id);
+    if (!user) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (token == undefined) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
@@ -923,7 +1004,6 @@ app.post('/getHistory', async (req, res) => {
             });
         } else {
             const client = await newGrpcConnection(account.org);
-            token = token.toString();
             const gateway = await connectGateway(client, account.user, account.org);
 
             try {
@@ -1243,7 +1323,7 @@ async function getWalletHistory(contract: Contract, token: string): Promise<any>
 
     const resultJson = utf8Decoder.decode(resultBytes);
     const result = JSON.parse(resultJson);
-    console.log('*** Result:', result);
+    // console.log('*** Result:', result);
     return result;
 }
 
@@ -1254,7 +1334,7 @@ async function getHistoryWithSource(contract: Contract, token: string): Promise<
 
     const resultJson = utf8Decoder.decode(resultBytes);
     const result = JSON.parse(resultJson);
-    console.log('*** Result:', result);
+    // console.log('*** Result:', result);
     return result;
 }
 
@@ -1336,6 +1416,7 @@ async function getUserDetails(user_id: string): Promise<any> {
     let user = null;
     snapshot.forEach((doc: any) => {
         user = doc.data();
+        Object.assign(user, { user_id: doc.id })
     });
     return user;
 }
