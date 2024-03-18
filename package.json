@@ -29,7 +29,6 @@
     "fabric-network": "^1.4.20",
     "fabric-protos": "^2.2.20",
     "firebase-admin": "^11.10.1",
-    "grpc": "^1.24.11",
     "js-sha256": "^0.10.1",
     "make": "^0.0.0",
     "moment": "^2.29.4",
