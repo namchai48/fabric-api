@@ -199,7 +199,7 @@ app.post('/getClientAccountID', async (req, res) => {
             console.log(error);
             res.send({
                 error: 1,
-                errmsg: error.cause.details
+                errmsg: error
             });
         } finally {
             gateway.close();
@@ -370,7 +370,7 @@ app.post('/getAllBalance', async (req, res) => {
                 console.log(error);
                 res.send({
                     error: 1,
-                    errmsg: error.cause.details
+                    errmsg: error
                 });
             } finally {
                 gateway.close();
@@ -832,10 +832,10 @@ app.post('/deposit', async (req, res) => {
                             data: await mint(contract, token, value, JSON.stringify(points_list))
                         });
                     } catch (error2: any) {
-                        console.log(error2.cause.details);
+                        console.log(error2);
                         res.send({
                             error: 1,
-                            errmsg: error2.cause.details
+                            errmsg: error2
                         });
                     } finally {
                         gateway.close();
@@ -935,7 +935,7 @@ app.post('/withdraw', async (req, res) => {
                         console.log(error);
                         res.send({
                             error: 1,
-                            errmsg: error.cause.details
+                            errmsg: error
                         });
                     } finally {
                         gateway.close();
@@ -983,7 +983,8 @@ app.post('/acceptOffer', async (req, res) => {
             } else {
                 // Backward from to between user who create offer and accept offer
                 const doc = snapshot.docs[0].data();
-                const from_account_id = doc.account_id;
+                const from_user = await getUserDetails(doc.from_user_id);
+                const from_account_id = from_user.certificate;
                 const from_value = doc.to_value;
                 const from_token = doc.to_token;
                 const to_value = doc.from_value;
@@ -1007,7 +1008,7 @@ app.post('/acceptOffer', async (req, res) => {
                     await db.collection('offers').doc(offer_id).delete();
                 } catch (error: any) {
                     console.log(error);
-                    const errmsg = error == null ? "" : error.cause.details;
+                    const errmsg = error == null ? "" : error;
                     res.send({
                         error: 1,
                         errmsg
@@ -1062,7 +1063,7 @@ app.post('/getHistory', async (req, res) => {
                 console.log(error);
                 res.send({
                     error: 1,
-                    errmsg: error.cause.details
+                    errmsg: error
                 });
             } finally {
                 gateway.close();
@@ -1109,7 +1110,7 @@ app.post('/getHistoryWithSource', async (req, res) => {
                 console.log(error);
                 res.send({
                     error: 1,
-                    errmsg: error.cause.details
+                    errmsg: error
                 });
             } finally {
                 gateway.close();
