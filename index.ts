@@ -19,9 +19,6 @@ const axios = require('axios');
 const cors = require('cors');
 const morgan = require("morgan");
 
-import * as x509 from "@peculiar/x509";
-import e from "express";
-
 const FabricCAServices = require('fabric-ca-client');
 const { User, Key } = require('fabric-common');
 // const { Gateway, Wallets } = require('fabric-network');
@@ -447,6 +444,7 @@ app.post('/createOffer', async (req, res) => {
     let from_user_id = req.body.from_user_id;
     let from_value = req.body.from_value;
     let from_token = req.body.from_token;
+    let from_token_list = req.body.from_token_list;
     let to_value = req.body.to_value;
     let to_token = req.body.to_token;
     if (from_value == undefined || from_token == undefined || to_value == undefined || to_token == undefined) {
@@ -478,6 +476,7 @@ app.post('/createOffer', async (req, res) => {
                     await docRef.set({
                         from_user_id,
                         from_token,
+                        from_token_list,
                         from_value,
                         to_token,
                         to_value,
@@ -530,6 +529,41 @@ app.post('/deleteOffer', async (req, res) => {
         }
     }
 })
+
+app.post('/getOfferDetails', async (req, res) => {
+    const user_id = req.body.user_id;
+    const offer_id = req.body.offer_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).get();
+        if (snapshot._size > 0) {
+            let data = null;
+            snapshot.forEach((doc: any) => {
+                const doc_data = doc.data();
+                data = Object.assign(doc.data(), {
+                    offer_id: doc.id,
+                    from_value: parseInt(doc_data.from_value),
+                    to_value: parseInt(doc_data.to_value),
+                });
+            });
+            res.send({
+                error: 0,
+                data
+            });
+        } else {
+            res.send({
+                error: 1,
+                errmsg: `Can't find offer id ${offer_id}`
+            });
+        }
+    }
+})
+
 
 app.post('/getAllTokens', async (req, res) => {
     const user_id = req.body.user_id;
