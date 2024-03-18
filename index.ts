@@ -953,15 +953,21 @@ app.post('/withdraw', async (req, res) => {
 });
 
 app.post('/acceptOffer', async (req, res) => {
-    let account_id = req.body.account_id;
+    const user_id = req.body.user_id;
     const offer_id = req.body.offer_id;
-    if (offer_id == undefined) {
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else if (offer_id == undefined) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
         });
     } else {
-        const account = getUserAndOrg(account_id);
+        const account = getUserAndOrg(user.certificate);
         if (account.org == null || account.user == null) {
             res.send({
                 error: 1,
