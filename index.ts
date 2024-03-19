@@ -680,6 +680,13 @@ app.post('/getAllTransfer', async (req, res) => {
             const contract = network.getContract(chaincodeName);
             const tokenName = await getAllTokens(contract);
             const token_list = tokenName.split(',');
+
+            const allUserList: any = []
+            const snapshot = await db.collection('user').get();
+            snapshot.forEach((doc: any) => {
+                allUserList.push(doc.data());
+            });
+
             const all_transection: any = [];
             for (let i = 0; i < token_list.length; i++) {
                 const token = token_list[i]
@@ -688,6 +695,7 @@ app.post('/getAllTransfer', async (req, res) => {
                     delete row.cheques
                     Object.assign(row, { 
                         token,
+                        user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
                         timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
                     })
                     if (row.tx_account != '0x0') {
