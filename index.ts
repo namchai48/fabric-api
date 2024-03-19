@@ -850,20 +850,32 @@ app.post('/getAllTransferAdmin', async (req, res) => {
             all_transection.forEach((transection: any) => {
                 const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
                 if (transfer != undefined) {
-                    if (transection.tx_amount < 0) {
-                        if (transfer.from == null) {
-                            Object.assign(transfer, { from: transection })
+                    let isNew = true;
+                    transfer.details.forEach((row: any) => {
+                        if ((row.from != null && row.from.token == transection.token) || (row.to != null && row.to.token == transection.token)) {
+                            if (transection.tx_amount < 0) {
+                                Object.assign(row, { from: transection })
+                            } else {
+                                Object.assign(row, { to: transection })
+                            }
+                            isNew = false
                         }
-                    } else {
-                        if (transfer.to == null) {
-                            Object.assign(transfer, { to: transection })
-                        }
+                    })
+                    if (isNew) {
+                        transfer.details.push({
+                            from: transection.tx_amount < 0 ? transection : null,
+                            to: transection.tx_amount > 0 ? transection : null
+                        })
                     }
                 } else {
                     const data = {
                         tx_id: transection.tx_id,
-                        from: transection.tx_amount < 0 ? transection : null,
-                        to: transection.tx_amount > 0 ? transection : null
+                        details: [
+                            {
+                                from: transection.tx_amount < 0 ? transection : null,
+                                to: transection.tx_amount > 0 ? transection : null
+                            }
+                        ]
                     }
                     all_transfer.push(data);
                 }
