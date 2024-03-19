@@ -864,13 +864,14 @@ app.post('/withdraw', async (req, res) => {
     const user_org_token = req.body.user_org_token;
     let token = req.body.token;
     let value = req.body.value;
+    let points_list = req.body.points_list;
     const user = await getUserDetails(user_id);
     if (user == null) {
         res.send({
             error: 1,
             errmsg: "Authorization failure."
         });
-    } else if (token == null) {
+    } else if (token == null || value == null || points_list == null) {
         res.send({
             error: 1,
             errmsg: "Missing some variables."
@@ -897,7 +898,8 @@ app.post('/withdraw', async (req, res) => {
                 // Call 3rd party api to check enough points and format to poitns_list and transfer points to exchange account
                 const postData = {
                     token: user_org_token,
-                    value
+                    value,
+                    points_list
                 };
                 const url = data.url_withdraw;
                 let error: any = null;
