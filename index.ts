@@ -515,7 +515,7 @@ app.post('/deleteOffer', async (req, res) => {
             errmsg: "Authorization failure."
         });
     } else {
-        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).where('user_id', '==', user_id).get();
+        const snapshot = await db.collection('offers').where('__name__', '==', offer_id).where('from_user_id', '==', user_id).get();
         if (snapshot._size > 0) {
             await db.collection('offers').doc(offer_id).delete();
             res.send({
