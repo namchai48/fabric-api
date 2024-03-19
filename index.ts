@@ -704,13 +704,11 @@ app.post('/getAllConvertAdmin', async (req, res) => {
                         delete row.cheques
                         Object.assign(row, { 
                             token,
+                            user: user.username,
                             organization: allOrgList.find((org: any) => org.token_name == token).name,
                             timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
                         })
                         if (row.tx_account == '0x0') {
-                            Object.assign(row, { 
-                                user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
-                            })
                             all_transection.push(row)
                         }
                     })
