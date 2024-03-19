@@ -661,6 +661,72 @@ app.post('/getAllConvert', async (req, res) => {
     }
 });
 
+app.post('/getAllConvertAdmin', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const account = getUserAndOrg(user.certificate);
+        const client = await newGrpcConnection(account.org);
+
+        const gateway = await connectGateway(client, account.user, account.org);
+
+        try {
+            const network = gateway.getNetwork(channelName);
+            const contract = network.getContract(chaincodeName);
+            const tokenName = await getAllTokens(contract);
+            const token_list = tokenName.split(',');
+
+            const allUserList: any = []
+            const snapshot1 = await db.collection('user').get();
+            snapshot1.forEach((doc: any) => {
+                allUserList.push(doc.data());
+            });
+
+            const all_transection: any = [];
+
+            const allOrgList: any = []
+            const snapshot2 = await db.collection('organization').get();
+            snapshot2.forEach((doc: any) => {
+                allOrgList.push(doc.data());
+            });
+
+            for (let i = 0; i < token_list.length; i++) {
+                const token = token_list[i]
+                for (let j = 0; j < allUserList.length; j++) {
+                    const user = allUserList[j]
+                    const data = await getWalletHistoryByOwner(contract, user.certificate, token);
+                    data.forEach((row: any) => {
+                        delete row.cheques
+                        Object.assign(row, { 
+                            token,
+                            organization: allOrgList.find((org: any) => org.token_name == token).name,
+                            timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
+                        })
+                        if (row.tx_account == '0x0') {
+                            Object.assign(row, { 
+                                user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
+                            })
+                            all_transection.push(row)
+                        }
+                    })
+                }
+            }
+            res.send({
+                error: 0,
+                data: all_transection
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
+
 app.post('/getAllTransfer', async (req, res) => {
     const user_id = req.body.user_id;
     const user = await getUserDetails(user_id);
@@ -730,6 +796,123 @@ app.post('/getAllTransfer', async (req, res) => {
         } finally {
             gateway.close();
             client.close();
+        }
+    }
+});
+
+app.post('/getAllTransferAdmin', async (req, res) => {
+    const user_id = req.body.user_id;
+    const user = await getUserDetails(user_id);
+    if (user == null) {
+        res.send({
+            error: 1,
+            errmsg: "Authorization failure."
+        });
+    } else {
+        const account = getUserAndOrg(user.certificate);
+        const client = await newGrpcConnection(account.org);
+
+        const gateway = await connectGateway(client, account.user, account.org);
+
+        try {
+            const network = gateway.getNetwork(channelName);
+            const contract = network.getContract(chaincodeName);
+            const tokenName = await getAllTokens(contract);
+            const token_list = tokenName.split(',');
+
+            const allUserList: any = []
+            const snapshot = await db.collection('user').get();
+            snapshot.forEach((doc: any) => {
+                allUserList.push(doc.data());
+            });
+
+            const all_transection: any = [];
+            for (let i = 0; i < token_list.length; i++) {
+                const token = token_list[i]
+                for (let j = 0; j < allUserList.length; j++) {
+                    const user = allUserList[j]
+                    const data = await getWalletHistoryByOwner(contract, user.certificate, token);
+                    data.forEach((row: any) => {
+                        delete row.cheques
+                        Object.assign(row, { 
+                            token,
+                            timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
+                        })
+                        if (row.tx_account != '0x0') {
+                            Object.assign(row, { 
+                                user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
+                            })
+                            all_transection.push(row)
+                        }
+                    })
+                }
+            }
+            const all_transfer: any = [];
+            all_transection.forEach((transection: any) => {
+                const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
+                if (transfer != undefined) {
+                    if (transection.tx_amount < 0) {
+                        Object.assign(transfer, { from: transection })
+                    } else {
+                        Object.assign(transfer, { to: transection })
+                    }
+                } else {
+                    const data = {
+                        tx_id: transection.tx_id,
+                        from: transection.tx_amount < 0 ? transection : null,
+                        to: transection.tx_amount > 0 ? transection : null
+                    }
+                    all_transfer.push(data);
+                }
+            });
+            res.send({
+                error: 0,
+                data: all_transfer
+            });
+        } finally {
+            gateway.close();
+            client.close();
+        }
+    }
+});
+
+app.post('/getAllTokenSupply', async (req, res) => {
+    const user_id = req.body.user_id;
+    if (!user_id) {
+        res.send({
+            error: 1,
+            errmsg: "Missing some variables."
+        });
+    } else {
+        const user = await getUserDetails(user_id);
+        if (user == null) {
+            res.send({
+                error: 1,
+                errmsg: "Authorization failure."
+            });
+        } else {
+            const account_id = user.certificate;
+            const account = getUserAndOrg(account_id);
+            const client = await newGrpcConnection(account.org);
+            const gateway = await connectGateway(client, account.user, account.org);
+            try {
+                // Get a network instance representing the channel where the smart contract is deployed.
+                const network = gateway.getNetwork(channelName);
+    
+                // Get the smart contract from the network.
+                const contract = network.getContract(chaincodeName);
+    
+                // Return all the current assets on the ledger.
+                const tokenSupply = await getAllTokenSupply(contract);
+                res.send({
+                    error: 0,
+                    data: tokenSupply
+                });
+    
+            } finally {
+                gateway.close();
+                client.close();
+            }
         }
     }
 });
@@ -1288,6 +1471,19 @@ async function getAllTokens(contract: Contract): Promise<any> {
     // return JSON.parse(resultJson);
     return resultJson;
 }
+
+/**
+ * Evaluate a transaction to query ledger state.
+ */
+async function getAllTokenSupply(contract: Contract): Promise<any> {
+    console.log('\n--> Evaluate Transaction: GetAllAssets, function returns all the current assets on the ledger');
+
+    const resultBytes = await contract.evaluateTransaction('GetAllTokenSupply');
+
+    const resultJson = utf8Decoder.decode(resultBytes);
+    return JSON.parse(resultJson);
+    // return resultJson;
+}
 /**
  * Submit a transaction synchronously, blocking until it has been committed to the ledger.
  */
@@ -1373,6 +1569,17 @@ async function getWalletHistory(contract: Contract, token: string): Promise<any>
     console.log('\n--> Evaluate Transaction: ReadAsset, function returns asset attributes');
 
     const resultBytes = await contract.evaluateTransaction('GetHistoryForKey', token);
+
+    const resultJson = utf8Decoder.decode(resultBytes);
+    const result = JSON.parse(resultJson);
+    // console.log('*** Result:', result);
+    return result;
+}
+
+async function getWalletHistoryByOwner(contract: Contract, owner: string, token: string): Promise<any> {
+    console.log('\n--> Evaluate Transaction: ReadAsset, function returns asset attributes');
+
+    const resultBytes = await contract.evaluateTransaction('GetHistoryForKeyWithOwner', owner, token);
 
     const resultJson = utf8Decoder.decode(resultBytes);
     const result = JSON.parse(resultJson);
