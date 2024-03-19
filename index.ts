@@ -765,6 +765,7 @@ app.post('/getAllTransfer', async (req, res) => {
                         Object.assign(row, { 
                             user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
                         })
+                        delete row.tx_account
                         all_transection.push(row)
                     }
                 })
@@ -850,9 +851,13 @@ app.post('/getAllTransferAdmin', async (req, res) => {
                 const transfer = all_transfer.find((row: any) => row.tx_id == transection.tx_id);
                 if (transfer != undefined) {
                     if (transection.tx_amount < 0) {
-                        Object.assign(transfer, { from: transection })
+                        if (transfer.from == null) {
+                            Object.assign(transfer, { from: transection })
+                        }
                     } else {
-                        Object.assign(transfer, { to: transection })
+                        if (transfer.to == null) {
+                            Object.assign(transfer, { to: transection })
+                        }
                     }
                 } else {
                     const data = {
