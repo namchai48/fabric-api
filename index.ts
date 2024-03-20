@@ -34,7 +34,7 @@ const chaincodeName = envOrDefault('CHAINCODE_NAME', 'token_erc20');
 
 console.log(__dirname);
 
-const serviceAccount = require('/root/fabric-api/key.json');
+const serviceAccount = require(__dirname+'/../key.json');
 
 initializeApp({
     credential: cert(serviceAccount)
@@ -481,7 +481,7 @@ app.post('/createOffer', async (req, res) => {
                         to_token,
                         to_value,
                         org: account.org,
-                        user: account.user,
+                        user: user.username,
                         email: user.email,
                         created: moment().format("YYYY-MM-DD HH:mm:ss")
                     });
