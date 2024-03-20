@@ -833,13 +833,15 @@ app.post('/getAllTransferAdmin', async (req, res) => {
                     const data = await getWalletHistoryByOwner(contract, user.certificate, token);
                     data.forEach((row: any) => {
                         delete row.cheques
+                        delete row.balance
                         Object.assign(row, { 
                             token,
                             timestamp: moment(row.timestamp).format("YYYY-MM-DD HH:mm:ss")
                         })
                         if (row.tx_account != '0x0') {
-                            Object.assign(row, { 
-                                user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
+                            Object.assign(row, {
+                                tx_user: allUserList.find((user: any) => user.certificate == row.tx_account).username,
+                                user: user.username,
                             })
                             all_transection.push(row)
                         }
@@ -852,7 +854,7 @@ app.post('/getAllTransferAdmin', async (req, res) => {
                 if (transfer != undefined) {
                     let isNew = true;
                     transfer.details.forEach((row: any) => {
-                        if ((row.from != null && row.from.token == transection.token) || (row.to != null && row.to.token == transection.token)) {
+                        if ((row.from != null && row.from.user == transection.user) || (row.to != null && row.to.user == transection.user)) {
                             if (transection.tx_amount < 0) {
                                 Object.assign(row, { from: transection })
                             } else {
